@@ -16,10 +16,11 @@ public enum ColorType
     Color_4,
     Color_5,
     Color_6,
-    
-    NONE = 0
+
+    NONE = 999
 }
 
+[ExecuteAlways]
 public class StickmanColors : SerializedMonoBehaviour
 {
     public static StickmanColors Instance { get; private set; }
@@ -36,6 +37,12 @@ public class StickmanColors : SerializedMonoBehaviour
         { ColorType.Color_6, new Color(1.0f, 0.55f, 0.1f) }   // Orange-ish
     };
 
+    [Title("Stickman Materials")]
+    [SerializeField, DictionaryDrawerSettings(KeyLabel = "Color Type", ValueLabel = "Material")]
+    private Dictionary<ColorType, Material> materials = new Dictionary<ColorType, Material>();
+
+    private static readonly int ColorProp = Shader.PropertyToID("_Color");
+
     private void Awake()
     {
         if (Instance != null && Instance != this)
@@ -44,24 +51,47 @@ public class StickmanColors : SerializedMonoBehaviour
             return;
         }
         Instance = this;
-        DontDestroyOnLoad(this);
+        if (Application.isPlaying)
+            DontDestroyOnLoad(this);
     }
 
-    // Get color by enum
-    public Color GetColor(ColorType type)
+    public ColorType GetRandomColor()
     {
-        return colors[type];
+        if (colors.Count == 0)
+            return ColorType.NONE;
+
+        var keys = new List<ColorType>(colors.Keys);
+        int index = Random.Range(0, keys.Count);
+        return keys[index];
     }
 
-    // Set color by enum
-    public void SetColor(ColorType type, Color newColor)
+    public Color GetColor(ColorType type) => colors[type];
+
+    public void SetColor(ColorType type, Color newColor) => colors[type] = newColor;
+
+    public IEnumerable<Color> GetAllColors() => colors.Values;
+
+    public Material GetMaterial(ColorType type)
     {
-        colors[type] = newColor;
+        return materials.ContainsKey(type) ? materials[type] : null;
     }
 
-    // Get all colors (useful for randomization)
-    public IEnumerable<Color> GetAllColors()
+    [Button("Update All Materials From Colors")]
+    private void UpdateAllMaterials()
     {
-        return colors.Values;
+        foreach (var kvp in materials)
+        {
+            ColorType type = kvp.Key;
+            Material mat = kvp.Value;
+
+            if (mat != null && colors.ContainsKey(type))
+            {
+                mat.SetColor(ColorProp, colors[type]);
+#if UNITY_EDITOR
+                UnityEditor.EditorUtility.SetDirty(mat);
+#endif
+                Debug.Log($"Updated {mat.name} with {type} color {colors[type]}");
+            }
+        }
     }
 }

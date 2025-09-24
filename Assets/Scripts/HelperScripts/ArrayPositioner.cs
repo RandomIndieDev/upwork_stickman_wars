@@ -4,6 +4,14 @@ using System.Linq;
 using Sirenix.OdinInspector;
 using UnityEngine;
 
+[Serializable]
+public class TwoDimensionalPos
+{
+    public int xPos;
+    public int yPos;
+}
+
+
 public class ArrayPositioner : MonoBehaviour
 {
     
@@ -28,6 +36,21 @@ public class ArrayPositioner : MonoBehaviour
     public GameObject GetPositionalObject(int pos)
     {
         return m_ArrayPositions[pos];
+    }
+    
+    public TwoDimensionalPos Get2DPosition(int index)
+    {
+        if (index < 0 || index >= m_ArrayPositions.Count)
+            throw new ArgumentOutOfRangeException(nameof(index), "Index is out of range!");
+
+        int row = index / columns;  
+        int col = index % columns; 
+
+        return new TwoDimensionalPos
+        {
+            xPos = col,  
+            yPos = row  
+        };
     }
     
     [Button]
@@ -59,6 +82,15 @@ public class ArrayPositioner : MonoBehaviour
             }
 
             rowCount--;
+        }
+    }
+
+    [Button]
+    public void CleanUp()
+    {
+        foreach (GameObject g in m_ArrayPositions.Where(g => g != null))
+        {
+            DestroyImmediate(g.transform.GetChild(0).transform.gameObject);
         }
     }
 }
