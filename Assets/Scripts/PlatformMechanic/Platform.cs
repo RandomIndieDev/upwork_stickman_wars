@@ -6,68 +6,59 @@ using Sirenix.OdinInspector;
 using TMPro;
 using UnityEngine;
 
-[Serializable]
-public class StickmanSlot
-{
-    public Stickman stickman;
-    public TwoDimensionalPos position;
-
-    public StickmanSlot(Stickman stickman, TwoDimensionalPos position)
-    {
-        this.stickman = stickman;
-        this.position = position;
-    }
-
-    public TwoDimensionalPos GetOneRowBackPos()
-    {
-        return new TwoDimensionalPos()
-        {
-            xPos = position.xPos,
-            yPos = position.yPos + 1
-        };
-    }
-
-    public override string ToString()
-    {
-        return $"{position.xPos} - {position.yPos + 1}";
-    }
-}
-
 public class Platform : MonoBehaviour
 {
     [BoxGroup("References"), SerializeField] TMP_Text m_PlatformCounterText;
     [BoxGroup("References"), SerializeField] GridPositioner m_GridPositioner;
-    [BoxGroup("References"), SerializeField] GameObject m_PlatformInput;
-    
+
+    [BoxGroup("References"), SerializeField] Transform m_PlatformInput;
+    [BoxGroup("References"), SerializeField] Transform m_PlatformOutput;
+
     [SerializeField, ReadOnly] ColorType m_CurrentColorType = ColorType.NONE;
-    [SerializeField, ReadOnly] int m_CurrentCounterValue;
+    
+    [SerializeField, ReadOnly] int m_AvailableCounterValue;
     [SerializeField, ReadOnly] int m_InTransitionCounterValue;
-    
     [SerializeField, ReadOnly] int m_MaxCounterValue;
-    
-    [SerializeField, ReadOnly] List<StickmanSlot> m_StickmanSlots = new();
-    List<StickmanSlot> m_FreedUpSpots = new();
 
     int m_Index;
-    
-    public GameObject PlatformInput => m_PlatformInput;
+
+    public Transform PlatformOutput => m_PlatformOutput;
+    public Transform PlatformInput => m_PlatformInput;
+
+    public List<StickmanGroup> m_GroupList;
+
     public int Index => m_Index;
 
-    public void PrebookSpots(int count)
+    public void PrebookSpots(ColorType colorType, int count)
     {
+        if (count <= 0)
+        {
+            Debug.LogWarning("⚠️ PrebookSpots called with non-positive count.");
+            return;
+        }
+
+        if (m_CurrentColorType == ColorType.NONE)
+        {
+            m_CurrentColorType = colorType;
+        }
+        else if (m_CurrentColorType != colorType)
+        {
+            Debug.LogError($"❌ Cannot prebook spots with {colorType}, " +
+                           $"platform already reserved for {m_CurrentColorType}.");
+            return;
+        }
+
         m_InTransitionCounterValue += count;
     }
 
     public void Init(int index)
     {
         m_Index = index;
-        
+
         m_CurrentColorType = ColorType.NONE;
-        m_StickmanSlots = new List<StickmanSlot>();
-        m_FreedUpSpots = new List<StickmanSlot>();
+        m_GroupList = new List<StickmanGroup>();
     }
 
-    // ✅ Exposed for PlatformManager
     public int MaxCounterValue
     {
         get => m_MaxCounterValue;
@@ -82,104 +73,135 @@ public class Platform : MonoBehaviour
 
     public int CurrentCounterValue
     {
-        get => m_CurrentCounterValue;
-        private set => m_CurrentCounterValue = value;
+        get => m_AvailableCounterValue;
+        private set => m_AvailableCounterValue = value;
     }
 
     void IncrementCounter() => CurrentCounterValue++;
-    void DecrementCounter(int val = 1) => CurrentCounterValue -= val;
 
-    public int GetRealCurrentCount()
+    void DecrementCounter(int val)
     {
-        return m_CurrentCounterValue + m_InTransitionCounterValue;
+        m_AvailableCounterValue -= val;
+
+        if (m_AvailableCounterValue > 0)
+        {
+            return;
+        }
+
+        m_CurrentColorType = ColorType.NONE;
+    }
+
+    public int GetAvailableCurrentCount()
+    {
+        return m_AvailableCounterValue;
+    }
+
+    public int GetAvailableSets()
+    {
+        // ✅ Work in sets of groups directly
+        return m_AvailableCounterValue / 4;
     }
 
     void UpdateCountText()
     {
-        m_PlatformCounterText.text = $"{m_MaxCounterValue - m_CurrentCounterValue}";
+        m_PlatformCounterText.text = $"{m_MaxCounterValue - m_AvailableCounterValue}";
     }
 
-    public void AddStickman(Stickman stickman)
+
+    public void AddStickmanGroup(StickmanGroup stickmanGroup, Action OnCompleted)
     {
-
-        var gridPos = Get2DPosition(m_CurrentCounterValue);
-        var worldPos = m_GridPositioner.GetWorldPosition(new Vector2Int(gridPos.xPos, gridPos.yPos));
-
-        stickman.RotateModelTo(worldPos, 0.05f);
-
-        stickman.SetState(new MovingState());
-        stickman.transform.SetParent(m_GridPositioner.transform);
-        stickman.transform.DOMove(worldPos, 1f).OnComplete(() =>
-        {
-            stickman.SetState(new IdleState());
-            UpdateCountText();
-        });
-
-        var newSlot = new StickmanSlot(stickman, gridPos);
-        m_StickmanSlots.Add(newSlot);
+        var stickmen = stickmanGroup.GetStickmen();
+        float duration = 0.7f;
+        int counter = 0;
         
-        IncrementCounter();
-        m_InTransitionCounterValue--;
+        foreach (var stickman in stickmen)
+        {
+            var gridPos = Get2DPosition(m_AvailableCounterValue);
+            var worldPos = m_GridPositioner.GetWorldPosition(new Vector2Int(gridPos.xPos, gridPos.yPos));
 
+            stickman.RotateModelTo(worldPos, 0.05f);
+            stickman.SetState(new MovingState());
+
+            int counter1 = counter;
+            stickman.transform.DOMove(worldPos, duration).SetDelay(0.08f * counter).SetEase(Ease.Linear)
+                .OnComplete(() =>
+                {
+                    stickman.SetState(new IdleState());
+                    UpdateCountText();
+
+                    if (counter1 == 3)
+                    {
+                        stickmanGroup.ResetFollowSphere();
+                        OnCompleted?.Invoke();
+                    }
+                });
+
+            counter++;
+            IncrementCounter();
+        }
+        
+        m_GroupList.Add(stickmanGroup);
+        
+        m_InTransitionCounterValue -= stickmen.Count;
         if (m_CurrentColorType == ColorType.NONE)
-            m_CurrentColorType = stickman.ColorType;
+        {
+            m_CurrentColorType = stickmanGroup.GroupColor;
+        }
     }
 
-    public void UpdateRemaining()
+
+    public void UpdateRemaining(int removedCount)
     {
-        foreach (var freedUpSpot in m_FreedUpSpots)
+        if (removedCount <= 0 || m_GroupList.Count == 0)
+            return;
+
+        float duration = 0.7f;
+        int groupIndex = 0;
+
+        foreach (var group in m_GroupList)
         {
-            var fromPos = freedUpSpot.GetOneRowBackPos();
-            var toPos = freedUpSpot.position;
+            var stickmen = group.GetStickmen();
+            for (int i = 0; i < stickmen.Count; i++)
+            {
+                var stickman = stickmen[i];
 
-            var stick = m_StickmanSlots.Find(s =>
-                s.position.xPos == fromPos.xPos &&
-                s.position.yPos == fromPos.yPos);
+                // Get the new grid position based on its *new index* in the platform
+                int flatIndex = groupIndex * 4 + i;
+                var gridPos = Get2DPosition(flatIndex);
+                var worldPos = m_GridPositioner.GetWorldPosition(new Vector2Int(gridPos.xPos, gridPos.yPos));
 
-            if (stick == null) continue;
+                // Re-animate to the new world position
+                stickman.RotateModelTo(worldPos, 0.05f);
+                stickman.SetState(new MovingState());
 
-            stick.position = toPos;
-            var targetWorldPos = m_GridPositioner.GetWorldPosition(new Vector2Int(toPos.xPos, toPos.yPos));
+                stickman.transform.DOMove(worldPos, duration)
+                    .SetEase(Ease.Linear)
+                    .OnComplete(() =>
+                    {
+                        stickman.SetState(new IdleState());
+                    });
+            }
 
-            stick.stickman.SetState(new WalkingState());
-            stick.stickman.transform.DOMove(targetWorldPos, 0.6f)
-                .SetEase(Ease.Linear)
-                .OnComplete(() => stick.stickman.SetState(new IdleState()));
+            groupIndex++;
         }
-
-        m_FreedUpSpots.Clear();
     }
-
-    public List<Stickman> RemoveStickmen(int count)
+    
+    public List<StickmanGroup> RemoveGroups(int count)
     {
-        var removedStickmen = new List<Stickman>();
-
-        if (count > m_CurrentCounterValue)
+        if (count > m_GroupList.Count)
         {
-            Debug.LogError("Cant Remove More Stickmen");
-            return removedStickmen;
+            return null;
         }
 
-        var orderedSlots = m_StickmanSlots
-            .OrderBy(slot => slot.position.yPos)
-            .ThenBy(slot => slot.position.xPos)
-            .ToList();
-
-        var toRemove = orderedSlots.Take(count).ToList();
-
-        foreach (var slot in toRemove)
-        {
-            m_FreedUpSpots.Add(slot);
-            removedStickmen.Add(slot.stickman);
-            m_StickmanSlots.Remove(slot);
-        }
-
-        DecrementCounter(count);
+        var removedGroups = m_GroupList.GetRange(0, count);
+        m_GroupList.RemoveRange(0, count);
+        
+        DecrementCounter(count * 4);
         UpdateCountText();
 
-        return removedStickmen;
+        return removedGroups;
     }
-
+    
     TwoDimensionalPos Get2DPosition(int index)
     {
         int row = index / m_GridPositioner.columns;

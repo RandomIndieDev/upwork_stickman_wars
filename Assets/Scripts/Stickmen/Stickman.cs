@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using DG.Tweening;
@@ -19,13 +20,19 @@ public class Stickman : MonoBehaviour
     
     [ShowInInspector, ReadOnly, BoxGroup("Debug")]
     private string DebugState => stateMachine != null ? stateMachine.CurrentStateName : "None";
-
-    
     StateMachine stateMachine;
     
     public Animator Animator => m_Animator;
     public GameObject Model => m_Model;
-    
+
+    Transform m_CurrentFollowTarget;
+
+    public Transform CurrentFollowTarget
+    {
+        get => m_CurrentFollowTarget;
+        set => m_CurrentFollowTarget = value;
+    }
+
     public ColorType ColorType
     {
         get => m_ColorType;
@@ -43,6 +50,11 @@ public class Stickman : MonoBehaviour
         SetMaterial(StickmanColors.Instance.GetMaterial(m_ColorType));
     }
 
+    public void SetTag(string tag)
+    {
+        gameObject.tag = tag;
+    }
+    
     public void SetState(IState<Stickman> newState)
     {
         stateMachine.SetState(newState);
@@ -51,6 +63,11 @@ public class Stickman : MonoBehaviour
     void Start()
     {
         Init();
+    }
+
+    public void SetTargetAndAttack(Stickman target)
+    {
+        SetState(new AttackingState(target));
     }
 
     public void SetMaterial(Material mat)
@@ -72,5 +89,15 @@ public class Stickman : MonoBehaviour
         m_Model.transform.DOKill();
         m_Model.transform.DOLocalRotate(Vector3.zero, 0.08f);
     }
-    
+
+    public void OnTriggerEnter(Collider other)
+    {
+        if (transform.CompareTag("Enemy")) return;
+        Debug.LogError("calledhere");
+        if (other.CompareTag("Enemy"))
+        {
+            gameObject.SetActive(false);
+            other.gameObject.SetActive(false);
+        }
+    }
 }

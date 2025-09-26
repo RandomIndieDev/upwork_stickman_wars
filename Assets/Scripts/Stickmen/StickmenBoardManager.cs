@@ -1,57 +1,61 @@
+using System;
 using System.Collections.Generic;
-using Sirenix.OdinInspector.Editor.Drawers;
+using Sirenix.OdinInspector;
 using UnityEngine;
 
 public class StickmenBoardManager : MonoBehaviour
 {
-    [SerializeField] Dictionary<Vector2Int, StickmanGroup> board = new();
-    [SerializeField] Transform m_GroupHolder;
-    [SerializeField] GridPositioner grid;
+    [SerializeField] private Dictionary<Vector2Int, GridObject> board = new();
+    [SerializeField] private Transform m_GroupHolder;
+    [SerializeField] private GridPositioner grid;
+
+    private Dictionary<StickmanGroup, List<Vector2Int>> groupExitCache = new();
 
     void Start()
     {
-        RegisterGroupsFromChildren();
+        RegisterObjectsFromChildren();
         LinkNeighbors();
     }
 
-    private void RegisterGroupsFromChildren()
+    private void RegisterObjectsFromChildren()
     {
         if (m_GroupHolder == null || grid == null)
         {
-            Debug.LogError("Missing references for GroupHolder or GridPositioner");
+            Debug.LogError("❌ Missing references for GroupHolder or GridPositioner");
             return;
         }
 
         for (int i = 0; i < m_GroupHolder.childCount; i++)
         {
             Transform child = m_GroupHolder.GetChild(i);
-            var group = child.GetComponent<StickmanGroup>();
-
-            if (group == null) continue;
+            var gridObj = child.GetComponent<GridObject>();
+            if (gridObj == null) continue;
 
             int row = i / grid.columns;
             int col = i % grid.columns;
 
-            RegisterGroup(group, row, col);
+            RegisterObject(gridObj, row, col);
         }
     }
 
-    private void RegisterGroup(StickmanGroup group, int row, int col)
+    private void RegisterObject(GridObject gridObj, int row, int col)
     {
         var key = new Vector2Int(col, row);
-        
+
         if (board.ContainsKey(key))
         {
-            Debug.LogWarning($"Overwriting existing group at {row},{col}");
+            Debug.LogWarning($"⚠️ Overwriting existing object at {row},{col}");
         }
-        if (row == 0)
+
+        if (gridObj.GridObjectType == GridObjectType.StickmanGroup && gridObj.GetStickManGroup() != null)
         {
-            group.IsTopEmpty = true;
+            var group = gridObj.GetStickManGroup();
+            if (row == 0) group.IsTopEmpty = true;
+
+            group.GameplayInit(key);
         }
-        
-        group.GameplayInit(key, grid.GetGridDistance());
-        
-        board[key] = group;
+
+        board[key] = gridObj;
     }
 
     private void LinkNeighbors()
@@ -59,8 +63,14 @@ public class StickmenBoardManager : MonoBehaviour
         foreach (var kvp in board)
         {
             Vector2Int pos = kvp.Key;
-            StickmanGroup group = kvp.Value;
-            
+            GridObject obj = kvp.Value;
+
+            if (obj == null || obj.GridObjectType != GridObjectType.StickmanGroup)
+                continue;
+
+            var group = obj.GetStickManGroup();
+            if (group == null) continue;
+
             TryLink(group, pos, new Vector2Int(pos.x - 1, pos.y), Direction.Left);
             TryLink(group, pos, new Vector2Int(pos.x + 1, pos.y), Direction.Right);
             TryLink(group, pos, new Vector2Int(pos.x, pos.y + 1), Direction.Top);
@@ -70,44 +80,79 @@ public class StickmenBoardManager : MonoBehaviour
 
     private void TryLink(StickmanGroup source, Vector2Int sourcePos, Vector2Int neighborPos, Direction dir)
     {
-        if (board.TryGetValue(neighborPos, out var neighbor))
+        if (!board.TryGetValue(neighborPos, out var neighborObj)) return;
+
+        if (neighborObj == null || neighborObj.GridObjectType != GridObjectType.StickmanGroup) return;
+
+        var neighborGroup = neighborObj.GetStickManGroup();
+        if (neighborGroup != null && neighborGroup.GroupColor == source.GroupColor)
         {
-            if (neighbor.GroupColor == source.GroupColor)
-            {
-                source.AddNeighbor(dir, neighbor);
-            }
+            source.AddNeighbor(dir, neighborGroup);
         }
     }
 
-    public StickmanGroup GetGroup(Vector2Int val)
+    public StickmanGroup GetGroup(Vector2Int pos)
     {
-        return board.TryGetValue(val, out var group) ? group : null;
-    }
-    
-    public Vector3 GridToWorld(Vector2Int gridPos)
-    {
-        return grid.GetWorldPosition(gridPos); 
-        // assuming your GridPositioner has such a method
+        if (board.TryGetValue(pos, out var gridObj) &&
+            gridObj != null &&
+            gridObj.GridObjectType == GridObjectType.StickmanGroup)
+        {
+            return gridObj.GetStickManGroup();
+        }
+
+        return null;
     }
 
-    public bool DoesGridContainsGroup(Vector2Int gridPos)
+    public bool IsObstacle(Vector2Int pos)
     {
-        return board[gridPos] != null;
+        return board.TryGetValue(pos, out var gridObj) &&
+               gridObj != null &&
+               gridObj.GridObjectType == GridObjectType.Crate;
     }
-    
+
+    public bool IsEmpty(Vector2Int pos)
+    {
+        return !board.ContainsKey(pos) || board[pos] == null;
+    }
+
+    public Vector3 GridToWorld(Vector2Int gridPos)
+    {
+        return grid.GetWorldPosition(gridPos);
+    }
+
+    // 🔹 Traversal helper
+    private bool CanTraverse(Vector2Int pos, ColorType sourceColor)
+    {
+        if (!board.ContainsKey(pos)) return false;
+
+        var gridObj = board[pos];
+        if (gridObj == null) return true; // empty cell is traversable
+
+        if (gridObj.GridObjectType == GridObjectType.Crate) return false; // obstacle blocks
+
+        var group = gridObj.GetStickManGroup();
+        if (group == null) return false;
+
+        return group.GroupColor == sourceColor;
+    }
+
+    // ------------------ EXIT / PATHFINDING ------------------
+
     public GroupExitData CanGroupGridExit(List<Vector2Int> grids)
     {
         foreach (var gridPos in grids)
         {
+            // ✅ If any part of the group is already on the first row, it can exit
             if (gridPos.y == 0)
             {
-                return new GroupExitData()
+                return new GroupExitData
                 {
                     CanExit = true,
                     GridExitStartPoint = gridPos
                 };
             }
-            
+
+            // Otherwise, can exit if any neighbor is empty
             Vector2Int[] neighbors =
             {
                 new Vector2Int(gridPos.x - 1, gridPos.y),
@@ -118,34 +163,32 @@ public class StickmenBoardManager : MonoBehaviour
 
             foreach (var neighbor in neighbors)
             {
-                if (!board.ContainsKey(neighbor)) 
-                    continue;
-                
-                if (board[neighbor] == null)
-                    return new GroupExitData()
+                if (!board.ContainsKey(neighbor)) continue;
+
+                if (IsEmpty(neighbor)) // empty = no GridObject there
+                {
+                    return new GroupExitData
                     {
                         CanExit = true,
                         GridExitStartPoint = gridPos
                     };
+                }
             }
         }
 
-        return new GroupExitData()
-        {
-            CanExit = false,
-        };
+        return new GroupExitData { CanExit = false };
     }
-    
-    
-    public void GetGroupExitPoints(ref GroupExitData exitData)
+
+
+    public void GetGroupExitPoints(ref GroupExitData exitData, ColorType sourceColor)
     {
         exitData.GridExitPointsOrdered = new List<Vector2Int>();
 
         if (exitData == null || !exitData.CanExit) return;
 
-        Queue<Vector2Int> queue = new Queue<Vector2Int>();
-        Dictionary<Vector2Int, Vector2Int> cameFrom = new Dictionary<Vector2Int, Vector2Int>();
-        HashSet<Vector2Int> visited = new HashSet<Vector2Int>();
+        Queue<Vector2Int> queue = new();
+        Dictionary<Vector2Int, Vector2Int> cameFrom = new();
+        HashSet<Vector2Int> visited = new();
 
         Vector2Int start = exitData.GridExitStartPoint;
         queue.Enqueue(start);
@@ -156,14 +199,13 @@ public class StickmenBoardManager : MonoBehaviour
         while (queue.Count > 0)
         {
             var current = queue.Dequeue();
-            
-            if (current.y == 0)
+
+            if (current.y == 0 && IsEmpty(current))
             {
                 exitPoint = current;
                 break;
             }
 
-            // 4 neighbors
             Vector2Int[] neighbors =
             {
                 new Vector2Int(current.x - 1, current.y),
@@ -175,10 +217,7 @@ public class StickmenBoardManager : MonoBehaviour
             foreach (var n in neighbors)
             {
                 if (visited.Contains(n)) continue;
-
-                if (!board.ContainsKey(n)) continue;
-                
-                if (board[n] == null)
+                if (CanTraverse(n, sourceColor))
                 {
                     queue.Enqueue(n);
                     visited.Add(n);
@@ -186,10 +225,10 @@ public class StickmenBoardManager : MonoBehaviour
                 }
             }
         }
-        
+
         if (exitPoint.HasValue)
         {
-            List<Vector2Int> path = new List<Vector2Int>();
+            List<Vector2Int> path = new();
             Vector2Int step = exitPoint.Value;
 
             while (step != start)
@@ -203,67 +242,23 @@ public class StickmenBoardManager : MonoBehaviour
             exitData.GridExitPointsOrdered = path;
         }
     }
-    
-    public class ExitRecommendation
-    {
-        public StickmanGroup Group;
-        public List<Vector2Int> Path;
-    }
 
-    public List<ExitRecommendation> GetRecommendedExitOrder(
-        List<StickmanGroup> groups, ColorType sourceColor)
-    {
-        var results = new List<ExitRecommendation>();
-
-        foreach (var group in groups)
-        {
-            var startGrid = group.GroupGridLoc; 
-
-            var path = GetSnakeExitPath(startGrid, group, sourceColor);
-            if (path.Count > 0)
-            {
-                results.Add(new ExitRecommendation
-                {
-                    Group = group,
-                    Path = path
-                });
-            }
-        }
-        
-        results.Sort((a, b) => a.Path.Count.CompareTo(b.Path.Count));
-
-        return results;
-    }
-    
-    private Dictionary<StickmanGroup, List<Vector2Int>> groupExitCache = new();
-
-    /// <summary>
-    /// Get the snake-like path for a specific cell in a group.
-    /// </summary>
     public List<Vector2Int> GetSnakeExitPath(Vector2Int start, StickmanGroup group, ColorType sourceColor)
     {
-        // ✅ If group already has a canonical exit path
         if (groupExitCache.TryGetValue(group, out var exitPath))
         {
-            // Merge this start cell into the existing path
             return MergeIntoExitPath(start, exitPath, sourceColor);
         }
 
-        // ✅ Otherwise run BFS normally to find first exit
         var bfsPath = FindPathToExit(start, sourceColor);
-
         if (bfsPath.Count > 0)
         {
-            // store as canonical exit path for this group
             groupExitCache[group] = bfsPath;
         }
 
         return bfsPath;
     }
 
-    /// <summary>
-    /// BFS from a single start cell to the nearest exit (* in row y=0).
-    /// </summary>
     private List<Vector2Int> FindPathToExit(Vector2Int start, ColorType sourceColor)
     {
         var queue = new Queue<Vector2Int>();
@@ -279,8 +274,7 @@ public class StickmenBoardManager : MonoBehaviour
         {
             var current = queue.Dequeue();
 
-            // ✅ exit condition
-            if (current.y == 0 && board[current] == null)
+            if (current.y == 0 && IsEmpty(current))
             {
                 exitFound = current;
                 break;
@@ -297,9 +291,7 @@ public class StickmenBoardManager : MonoBehaviour
             foreach (var n in neighbors)
             {
                 if (visited.Contains(n)) continue;
-                if (!board.ContainsKey(n)) continue;
-
-                if (board[n] == null || board[n].GroupColor == sourceColor)
+                if (CanTraverse(n, sourceColor))
                 {
                     queue.Enqueue(n);
                     visited.Add(n);
@@ -308,7 +300,6 @@ public class StickmenBoardManager : MonoBehaviour
             }
         }
 
-        // ✅ rebuild path
         var path = new List<Vector2Int>();
         if (exitFound == new Vector2Int(-1, -1)) return path;
 
@@ -324,12 +315,8 @@ public class StickmenBoardManager : MonoBehaviour
         return path;
     }
 
-    /// <summary>
-    /// Merge another cell into the existing canonical exit path.
-    /// </summary>
     private List<Vector2Int> MergeIntoExitPath(Vector2Int start, List<Vector2Int> exitPath, ColorType sourceColor)
     {
-        // BFS until we hit any node already in the canonical path
         var queue = new Queue<Vector2Int>();
         var cameFrom = new Dictionary<Vector2Int, Vector2Int>();
         var visited = new HashSet<Vector2Int>();
@@ -360,9 +347,7 @@ public class StickmenBoardManager : MonoBehaviour
             foreach (var n in neighbors)
             {
                 if (visited.Contains(n)) continue;
-                if (!board.ContainsKey(n)) continue;
-
-                if (board[n] == null || board[n].GroupColor == sourceColor)
+                if (CanTraverse(n, sourceColor))
                 {
                     queue.Enqueue(n);
                     visited.Add(n);
@@ -371,7 +356,6 @@ public class StickmenBoardManager : MonoBehaviour
             }
         }
 
-        // ✅ rebuild path from start → mergePoint
         var mergePath = new List<Vector2Int>();
         if (mergePoint == new Vector2Int(-1, -1)) return mergePath;
 
@@ -386,7 +370,6 @@ public class StickmenBoardManager : MonoBehaviour
 
         mergePath.Reverse();
 
-        // ✅ then append canonical exit path starting at mergePoint
         int mergeIndex = exitPath.IndexOf(mergePoint);
         for (int i = mergeIndex + 1; i < exitPath.Count; i++)
         {
@@ -396,71 +379,53 @@ public class StickmenBoardManager : MonoBehaviour
         return mergePath;
     }
     
-    public List<Vector2Int> GetPathToExitStart(Vector2Int start, Vector2Int target, ColorType sourceColor)
+    public class ExitRecommendation
     {
-        var queue = new Queue<Vector2Int>();
-        var cameFrom = new Dictionary<Vector2Int, Vector2Int>();
-        var visited = new HashSet<Vector2Int>();
+        public StickmanGroup Group;
+        public List<Vector2Int> Path;
+    }
 
-        queue.Enqueue(start);
-        visited.Add(start);
+    public List<ExitRecommendation> GetRecommendedExitOrder(
+        List<StickmanGroup> groups, ColorType sourceColor)
+    {
+        var results = new List<ExitRecommendation>();
 
-        bool reached = false;
-
-        while (queue.Count > 0)
+        foreach (var group in groups)
         {
-            var current = queue.Dequeue();
+            var startGrid = group.GroupGridLoc;
 
-            if (current == target)
+            // ✅ use updated snake path (obstacle-aware)
+            var path = GetSnakeExitPath(startGrid, group, sourceColor);
+            if (path.Count > 0)
             {
-                reached = true;
-                break;
-            }
-
-            Vector2Int[] neighbors =
-            {
-                new Vector2Int(current.x - 1, current.y),
-                new Vector2Int(current.x + 1, current.y),
-                new Vector2Int(current.x, current.y - 1),
-                new Vector2Int(current.x, current.y + 1)
-            };
-
-            foreach (var n in neighbors)
-            {
-                if (visited.Contains(n)) continue;
-                if (!board.ContainsKey(n)) continue;
-
-                if (board[n] == null || board[n].GroupColor == sourceColor)
+                results.Add(new ExitRecommendation
                 {
-                    queue.Enqueue(n);
-                    visited.Add(n);
-                    cameFrom[n] = current;
-
-                    // ✅ If we just reached target, stop immediately
-                    if (n == target)
-                    {
-                        reached = true;
-                        queue.Clear();
-                        break;
-                    }
-                }
+                    Group = group,
+                    Path = path
+                });
             }
         }
 
-        // ✅ rebuild path
-        var path = new List<Vector2Int>();
-        if (!reached) return path;
+        // ✅ shortest path first = most reachable group exits first
+        results.Sort((a, b) => a.Path.Count.CompareTo(b.Path.Count));
 
-        var step = target;
-        path.Add(step);
-        while (cameFrom.ContainsKey(step))
-        {
-            step = cameFrom[step];
-            path.Add(step);
-        }
+        return results;
+    }
+    
+    public GridObject GetGridObj(Vector2Int gridPos)
+    {
+        if (!board.TryGetValue(gridPos, out var obj) || obj == null)
+            return null;
 
-        path.Reverse();
-        return path;
+        return obj;
+    }
+    
+    public GridObjectType GetGridType(Vector2Int gridPos)
+    {
+        if (!board.TryGetValue(gridPos, out var obj) || obj == null)
+            return GridObjectType.NONE;
+
+        return obj.GridObjectType;
     }
     
     public void EmptyGrids(List<Vector2Int> grids)
@@ -470,7 +435,7 @@ public class StickmenBoardManager : MonoBehaviour
             board[grid] = null;
         }
     }
-    
+
     public void ClearAllExitCaches()
     {
         groupExitCache.Clear();

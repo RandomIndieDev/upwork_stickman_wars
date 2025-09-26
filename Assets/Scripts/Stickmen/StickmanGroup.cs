@@ -22,7 +22,10 @@ public class StickmanGroup : MonoBehaviour
     [SerializeField] List<Stickman> m_Stickmen;
     
     [SerializeField] Vector2Int m_GroupGridLoc;
-    [SerializeField] Vector2 m_HoriVertDist;
+
+
+    [BoxGroup("References"), SerializeField]
+    List<Transform> m_localOriginalPos;
     
 
     [BoxGroup("Settings"), SerializeField] Transform m_FollowSphere;
@@ -41,12 +44,60 @@ public class StickmanGroup : MonoBehaviour
         set => m_IsTopEmpty = value;
     }
 
-    public void GameplayInit(Vector2Int gridLoc, Vector2 horizontalVericalDist)
+    public void GameplayInit(Vector2Int gridLoc)
     {
         m_GroupGridLoc = gridLoc;
-        m_HoriVertDist = horizontalVericalDist;
+        
         //TODO: Remove this
         m_FollowSphere.GetComponent<MeshRenderer>().enabled = false;
+        
+        if (m_localOriginalPos == null) return;
+        if (m_localOriginalPos.Count <= 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < m_Stickmen.Count; i++)
+        {
+            m_localOriginalPos[i].localPosition = m_Stickmen[i].transform.localPosition;
+        }
+    }
+
+    public void ResetFollowSphere()
+    {
+        if (m_Stickmen == null || m_Stickmen.Count == 0)
+            return;
+
+        Vector3 sum = Vector3.zero;
+        int count = 0;
+
+        foreach (var stickman in m_Stickmen)
+        {
+            if (stickman == null) continue;
+            sum += stickman.transform.position;
+            count++;
+        }
+
+        if (count > 0)
+        {
+            m_FollowSphere.position = sum / count;
+        }
+    }
+
+    public void Hide()
+    {
+        foreach (var stickman in m_Stickmen)
+        {
+            stickman.gameObject.SetActive(false);
+        }
+    }
+
+    public void SetStateForAll(IState<Stickman> state)
+    {
+        foreach (var stickman in m_Stickmen)
+        {
+            stickman.SetState(state);   
+        }
     }
 
     public void Init(ColorType selectedColor)
@@ -61,6 +112,19 @@ public class StickmanGroup : MonoBehaviour
         }
     }
 
+    public void SetTags(string self, string enemy)
+    {
+        foreach (var stickman in m_Stickmen)
+        {
+            stickman.SetTag(self);
+        }
+    }
+
+    public int GetSpotCount()
+    {
+        return m_Stickmen.Count;
+    }
+    
     public List<Stickman> GetStickmen()
     {
         //TODO: Remove
@@ -114,6 +178,40 @@ public class StickmanGroup : MonoBehaviour
                 GameObject.Destroy(tempParent);
             });
     }
+    
+    public List<StickmanGroup> GetConnectedChain(int maxCount)
+    {
+        var result = new List<StickmanGroup>();
+        var visited = new HashSet<StickmanGroup>();
+        CollectChain(this, maxCount, result, visited);
+        return result;
+    }
+
+    private void CollectChain(StickmanGroup group, int maxCount, List<StickmanGroup> result, HashSet<StickmanGroup> visited)
+    {
+        if (group == null || visited.Contains(group) || result.Count >= maxCount)
+            return;
+
+        visited.Add(group);
+        result.Add(group);
+
+        if (result.Count >= maxCount) return;
+
+        // Priority order: Left, Right, Diagonal, Up
+        Direction[] priorities = { Direction.Left, Direction.Right, Direction.Top, Direction.Bottom };
+
+        foreach (var dir in priorities)
+        {
+            var neighbor = group.GetNeighbor(dir);
+            if (neighbor != null && neighbor.GroupColor == group.GroupColor)
+            {
+                CollectChain(neighbor, maxCount, result, visited);
+                if (result.Count >= maxCount) return;
+            }
+        }
+    }
+
+
 
     void CollectConnectedGroups(StickmanGroup group, HashSet<StickmanGroup> visited)
     {
@@ -138,6 +236,14 @@ public class StickmanGroup : MonoBehaviour
         return sum / groups.Count;
     }
 
+    public void MoveGroup(Vector3 pos, float time, Action OnCompleted)
+    {
+        SetStateForAll(new WalkingState());
+        transform.DOMove(pos, time).onComplete += () =>
+        {
+            OnCompleted?.Invoke();
+        };
+    }
     
     public StickmanGroup GetNeighbor(Direction dir) =>
         m_ConnectedGroups.TryGetValue(dir, out var neighbor) ? neighbor : null;
@@ -222,28 +328,55 @@ public class StickmanGroup : MonoBehaviour
 
         return visited;
     }
+    
+    public HashSet<StickmanGroup> GetAllConnectedVertical()
+    {
+        var visited = new HashSet<StickmanGroup>();
+        var stack = new Stack<StickmanGroup>();
+        stack.Push(this);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+
+            if (!visited.Add(current)) continue; // already processed
+
+            // Only check vertical neighbors (Top, Bottom)
+            foreach (var kvp in current.m_ConnectedGroups)
+            {
+                if (kvp.Key != Direction.Top && kvp.Key != Direction.Bottom)
+                    continue;
+
+                var neighbor = kvp.Value;
+                if (neighbor != null && neighbor.GroupColor == GroupColor && !visited.Contains(neighbor))
+                {
+                    stack.Push(neighbor);
+                }
+            }
+        }
+
+        return visited;
+    }
+
 
     [Button]
     public void ActivateFollowPointState()
     {
-        foreach (var stickman in m_Stickmen)
+        for (int i = 0; i < m_Stickmen.Count; i++)
         {
-            stickman.SetState(new FollowPointState());
-        }
-    }
-
-    [Button]
-    public void DeactivateFollowPointState()
-    {
-        foreach (var stickman in m_Stickmen)
-        {
-            
+            m_Stickmen[i].CurrentFollowTarget = FollowSphere;
+            m_Stickmen[i].SetState(new FollowPointState(m_localOriginalPos[i]));
         }
     }
     
     public void TraverseThroughPoints(List<Vector3> positions, Action OnCompleted)
     {
         if (positions == null || positions.Count == 0) return;
+        if (positions.Count == 1)
+        {
+            OnCompleted?.Invoke();
+            return;
+        }
 
         m_FollowSphere.DOKill();
     
@@ -251,7 +384,6 @@ public class StickmanGroup : MonoBehaviour
         for (int i = 1; i < positions.Count; i++)
             totalDistance += Vector3.Distance(positions[i - 1], positions[i]);
 
-        // Base speed
         float baseSpeed = 2f;
         
         // float speed = baseSpeed + Mathf.Pow(positions.Count, 1.2f); // exponential style

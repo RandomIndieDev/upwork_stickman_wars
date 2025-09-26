@@ -1,60 +1,105 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using Dreamteck.Splines;
 using Sirenix.OdinInspector;
+using UnityEditor;
 using UnityEngine;
+
+[Serializable]
+public class SplineFeeder
+{
+    int m_TransferCount;
+
+    [BoxGroup("Spline")] public SplineComputer m_Spline;
+    
+    [BoxGroup("Node References")] public Transform m_NodeIn1;
+    [BoxGroup("Node References")] public Transform m_NodeIn2; 
+    [BoxGroup("Node References")] public Transform m_NodeOut1;  
+    [BoxGroup("Node References")] public Transform m_NodeOut2;
+
+    public void UpdateNodePositions(Vector3 startPos,Vector3 endPos, float zOffset)
+    {
+        m_NodeOut1.position = endPos;                             
+        m_NodeOut2.position = endPos + new Vector3(0, 0, -zOffset);
+        m_NodeIn1.position = startPos;                     
+        m_NodeIn2.position = startPos + new Vector3(0, 0, zOffset);
+        
+        m_Spline.RebuildImmediate();
+    }
+
+    public void IncrementTransferCount() 
+    {
+        m_TransferCount++;
+    }
+
+    public void DecrementTransferCount() 
+    {
+        m_TransferCount--;
+    }
+
+    public bool IsAvailable() => m_TransferCount <= 0;
+}
 
 public class StickmanFeeder : MonoBehaviour
 {
-    [BoxGroup("References"), SerializeField] PlatformManager m_PlatformManager;
-    [BoxGroup("References"), SerializeField] SplineComputer m_SplineComputer;
+    [BoxGroup("Spline References"), SerializeField] List<SplineFeeder> m_SplineFeeders;
 
-    [BoxGroup("References"), SerializeField] Transform m_NodeIn1;   // End node
-    [BoxGroup("References"), SerializeField] Transform m_NodeIn2;   // Control near end
-    [BoxGroup("References"), SerializeField] Transform m_NodeOut1;  // Start node
-    [BoxGroup("References"), SerializeField] Transform m_NodeOut2;  // Control near start
+    [BoxGroup("Settings"), SerializeField] float m_ZInwardOffset = 2f;
+    [BoxGroup("Settings"), SerializeField] public float m_MoveSpeed = 5f;
 
-    [BoxGroup("Settings"), SerializeField] float m_ZInwardOffset = 2f; // inward offset (flat X/Z)
-    [BoxGroup("Settings"), SerializeField] public float m_MoveSpeed = 5f; // units per second
-
-    public void BuildSplineFor(int platformIndex, Vector3 exitGridPos)
+    int GetFreeSplineFeeder()
     {
-        if (platformIndex < 0)
+        for (int i = 0; i < m_SplineFeeders.Count; i++)
         {
-            Debug.LogError("Invalid platform index for spline build");
-            return;
+            if (m_SplineFeeders[i].IsAvailable()) return i;
         }
 
-        Vector3 start = exitGridPos;
-        Vector3 end = m_PlatformManager.GetPlatformInput(platformIndex).position;
+        return -1;
+    }
 
-        m_NodeOut1.position = start;                             
-        m_NodeOut2.position = start + new Vector3(0, 0, -m_ZInwardOffset);
-        m_NodeIn1.position = end;                     
-        m_NodeIn2.position = end + new Vector3(0, 0, m_ZInwardOffset);
+    public SplineFeeder GetSplineFeeder(int index)
+    {
+        return m_SplineFeeders[index];
+    }
 
-        m_SplineComputer.Rebuild();
+    public int BuildSplineFor(Vector3 startGridPos, Vector3 exitGridPos)
+    {
+        var feederIndex = GetFreeSplineFeeder();
+
+        if (feederIndex < 0)
+        {
+            Debug.LogError($"Error: No free splines available : Script StickmanFeeder");
+            return -1;
+        }
+        
+        m_SplineFeeders[feederIndex].UpdateNodePositions(startGridPos, exitGridPos, m_ZInwardOffset);
+
+        return feederIndex;
     }
     
-    public void MoveAlongSpline(Transform follower, Action onComplete = null)
+    
+    public void MoveAlongSpline(int splineIndex, Transform follower, Action onComplete = null, Action OnEndReached = null)
     {
         if (follower == null) return;
-
+        
+        var spline = m_SplineFeeders[splineIndex].m_Spline;
+        
         var splineFollower = follower.GetComponent<SplineFollower>();
         if (splineFollower == null)
             splineFollower = follower.gameObject.AddComponent<SplineFollower>();
-
 
         splineFollower.followMode = SplineFollower.FollowMode.Uniform;
         splineFollower.direction = Spline.Direction.Forward;
         splineFollower.followSpeed = m_MoveSpeed;
         splineFollower.wrapMode = SplineFollower.Wrap.Default;
-        splineFollower.spline = m_SplineComputer;
+        
+        splineFollower.spline = spline;
 
         bool triggeredEarly = false;
         splineFollower.onMotionApplied += () =>
         {
-            if (triggeredEarly || !(splineFollower.result.percent >= 0.95f))
+            if (triggeredEarly || !(splineFollower.result.percent >= 0.93f))
             {
                 return;
             }
@@ -66,7 +111,15 @@ public class StickmanFeeder : MonoBehaviour
         splineFollower.onEndReached += d =>
         {
             splineFollower.enabled = false;
-            splineFollower.gameObject.SetActive(true);
+            OnEndReached?.Invoke();
         };
     }
+}
+
+public class SplineFeederData
+{
+    public Platform Platform;
+    public List<StickmenBoardManager.ExitRecommendation> ExitRecommendations;
+    public int TransferCount;
+    public int SplineFeederIndex;
 }

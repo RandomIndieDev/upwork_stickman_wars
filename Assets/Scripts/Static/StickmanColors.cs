@@ -51,6 +51,7 @@ public class StickmanColors : SerializedMonoBehaviour
             return;
         }
         Instance = this;
+        
         if (Application.isPlaying)
             DontDestroyOnLoad(this);
     }
