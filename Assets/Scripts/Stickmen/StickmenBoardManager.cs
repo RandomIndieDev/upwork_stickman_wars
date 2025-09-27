@@ -250,6 +250,9 @@ public class StickmenBoardManager : MonoBehaviour
             return MergeIntoExitPath(start, exitPath, sourceColor);
         }
 
+        Debug.LogError(" == Start ==");
+        Debug.LogError(start);
+        
         var bfsPath = FindPathToExit(start, sourceColor);
         if (bfsPath.Count > 0)
         {
@@ -393,8 +396,7 @@ public class StickmenBoardManager : MonoBehaviour
         foreach (var group in groups)
         {
             var startGrid = group.GroupGridLoc;
-
-            // ✅ use updated snake path (obstacle-aware)
+            
             var path = GetSnakeExitPath(startGrid, group, sourceColor);
             if (path.Count > 0)
             {

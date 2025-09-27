@@ -12,9 +12,32 @@ public class StickmanGroupSpawner : MonoBehaviour
     [BoxGroup("Prefabs"), SerializeField] Transform m_Obstacle;
 
     [BoxGroup("Settings"), SerializeField, Min(0)] int m_ObstacleCount = 0;
-    [BoxGroup("Settings"), SerializeField, Min(0)] int m_ProtectedTopRows = 1; // rows at y=0..N-1 where no obstacles are allowed
+    [BoxGroup("Settings"), SerializeField, Min(0)] int m_ProtectedTopRows = 1;
 
     public static event System.Action<StickmanGroup, int, int> OnGroupSpawned;
+
+    // -------- New: Generation Controls ----------
+    public enum GenerationMode { PureRandom, NeighborBias, ClusterGrow, PerlinIslands }
+
+    [BoxGroup("Generation"), SerializeField] GenerationMode m_Mode = GenerationMode.NeighborBias;
+
+    [BoxGroup("Generation"), SerializeField, Min(2)]
+    int m_NumColors = 4;
+
+    [BoxGroup("Generation"), ShowIf("@m_Mode == GenerationMode.NeighborBias"), Range(0f, 1f)]
+    float m_NeighborBias = 0.7f; // chance to copy a neighbor’s color
+
+    [BoxGroup("Generation"), ShowIf("@m_Mode == GenerationMode.ClusterGrow"), Min(1)]
+    int m_ClusterCount = 6;
+
+    [BoxGroup("Generation"), ShowIf("@m_Mode == GenerationMode.ClusterGrow")]
+    Vector2Int m_ClusterSize = new Vector2Int(4, 10);
+
+    [BoxGroup("Generation"), ShowIf("@m_Mode == GenerationMode.PerlinIslands"), Min(0.1f)]
+    float m_PerlinScale = 1.8f;
+
+    [BoxGroup("Generation"), SerializeField]
+    int m_Seed = 12345;
 
     [Button("Spawn Groups (Editor)", ButtonSizes.Large)]
     public void SpawnGroups()
@@ -34,23 +57,26 @@ public class StickmanGroupSpawner : MonoBehaviour
 
         int cols = m_GridPositioner.columns;
         int total = m_GridPositioner.SavedPositions.Count;
+        int rows = Mathf.CeilToInt((float)total / cols);
 
-        // Build eligible cell indices (exclude protected top rows)
+        // Eligible cells for obstacles (exclude protected top rows)
         var eligible = new List<int>(total);
         for (int i = 0; i < total; i++)
         {
-            int row = i / cols; // row-major
+            int row = i / cols;
             if (row >= m_ProtectedTopRows) eligible.Add(i);
         }
 
-        // Clamp obstacle count to eligible cells
         int obstacleTarget = Mathf.Clamp(m_ObstacleCount, 0, eligible.Count);
-
-        // Shuffle eligible indices and take the first N as obstacle positions
         Shuffle(eligible);
         var obstacleIndices = new HashSet<int>(eligible.Take(obstacleTarget));
 
-        // Now instantiate across the whole grid
+        // ---- Generate colors for non-obstacle cells ----
+        var rng = new System.Random(m_Seed);
+        var palette = BuildPaletteDistinct(rng, m_NumColors);
+        var colors = GenerateColorField(rows, cols, obstacleIndices, palette, rng);
+
+        // ---- Instantiate ----
         for (int i = 0; i < total; i++)
         {
             Vector3 localPos = m_GridPositioner.SavedPositions[i];
@@ -61,27 +87,228 @@ public class StickmanGroupSpawner : MonoBehaviour
             {
                 var obstacle = Instantiate(m_Obstacle, m_GridPositioner.transform);
                 m_GridPositioner.SetInPos(obstacle.gameObject, localPos);
-
-                // Tag with GridObject if your obstacle prefab has it (recommended)
                 var go = obstacle.GetComponent<GridObject>();
                 if (go != null) go.GridObjectType = GridObjectType.Crate;
             }
             else
             {
                 var group = Instantiate(m_StickmanGroup, m_GridPositioner.transform);
-                group.Init(StickmanColors.Instance.GetRandomColor());
+
+                // Assign chosen color
+                ColorType c = colors[i];
+                // Fallback if NONE slipped through
+                if (c == ColorType.NONE) c = palette[rng.Next(palette.Count)];
+
+                group.Init(c);
                 m_GridPositioner.SetInPos(group.gameObject, localPos);
 
-                // Tag with GridObject (recommended so your board manager can detect it)
                 var go = group.GetComponent<GridObject>();
-                if (go != null)
-                {
-                    go.GridObjectType = GridObjectType.StickmanGroup;
-                }
+                if (go != null) go.GridObjectType = GridObjectType.StickmanGroup;
 
                 OnGroupSpawned?.Invoke(group, row, col);
             }
         }
+    }
+
+    // --------------------------------------
+    // Color Field Generation
+    // --------------------------------------
+    private List<ColorType> BuildPaletteDistinct(System.Random rng, int count)
+    {
+        // Build a set of distinct ColorTypes using your StickmanColors palette.
+        var set = new HashSet<ColorType>();
+        // Guard in case enum has limited values; avoid infinite loop.
+        int safety = 500;
+        while (set.Count < count && safety-- > 0)
+        {
+            set.Add(StickmanColors.Instance.GetRandomColor()); // assumes returns ColorType
+        }
+        if (set.Count == 0) set.Add(ColorType.NONE);
+        return set.ToList();
+    }
+
+    private ColorType[] GenerateColorField(
+        int rows,
+        int cols,
+        HashSet<int> obstacles,
+        List<ColorType> palette,
+        System.Random rng)
+    {
+        int total = rows * cols;
+        var outColors = new ColorType[total];
+        for (int i = 0; i < total; i++) outColors[i] = ColorType.NONE;
+
+        switch (m_Mode)
+        {
+            case GenerationMode.PureRandom:
+                for (int i = 0; i < total; i++)
+                {
+                    if (obstacles.Contains(i)) continue;
+                    outColors[i] = palette[rng.Next(palette.Count)];
+                }
+                break;
+
+            case GenerationMode.NeighborBias:
+                for (int i = 0; i < total; i++)
+                {
+                    if (obstacles.Contains(i)) continue;
+
+                    int r = i / cols;
+                    int c = i % cols;
+                    int left = (c > 0) ? i - 1 : -1;
+                    int up = (r > 0) ? i - cols : -1;
+
+                    var neighborCandidates = new List<ColorType>(2);
+                    if (left >= 0 && !obstacles.Contains(left) && outColors[left] != ColorType.NONE)
+                        neighborCandidates.Add(outColors[left]);
+                    if (up >= 0 && !obstacles.Contains(up) && outColors[up] != ColorType.NONE)
+                        neighborCandidates.Add(outColors[up]);
+
+                    bool useNeighbor = neighborCandidates.Count > 0 && rng.NextDouble() < m_NeighborBias;
+                    if (useNeighbor)
+                    {
+                        outColors[i] = neighborCandidates[rng.Next(neighborCandidates.Count)];
+                    }
+                    else
+                    {
+                        outColors[i] = palette[rng.Next(palette.Count)];
+                    }
+                }
+                break;
+
+            case GenerationMode.ClusterGrow:
+                {
+                    // Available cells set (exclude obstacles)
+                    var remaining = new HashSet<int>(Enumerable.Range(0, total).Where(idx => !obstacles.Contains(idx)));
+
+                    int minSize = Mathf.Max(1, Mathf.Min(m_ClusterSize.x, m_ClusterSize.y));
+                    int maxSize = Mathf.Max(minSize, Mathf.Max(m_ClusterSize.x, m_ClusterSize.y));
+
+                    for (int k = 0; k < m_ClusterCount && remaining.Count > 0; k++)
+                    {
+                        // Pick a random seed
+                        int seedIdx = remaining.ElementAt(rng.Next(remaining.Count));
+                        var color = palette[rng.Next(palette.Count)];
+
+                        // Grow cluster via BFS
+                        int targetSize = rng.Next(minSize, maxSize + 1);
+                        var cluster = GrowCluster(seedIdx, targetSize, rows, cols, remaining, obstacles, rng);
+
+                        foreach (var idx in cluster) outColors[idx] = color;
+                    }
+
+                    // Fill any leftover cells by copying a colored neighbor (or random)
+                    foreach (var idx in Enumerable.Range(0, total))
+                    {
+                        if (obstacles.Contains(idx)) continue;
+                        if (outColors[idx] != ColorType.NONE) continue;
+
+                        var neigh = GetNeighbors4(idx, rows, cols);
+                        var colored = neigh.Where(n => !obstacles.Contains(n) && outColors[n] != ColorType.NONE).ToList();
+                        if (colored.Count > 0)
+                            outColors[idx] = outColors[colored[rng.Next(colored.Count)]];
+                        else
+                            outColors[idx] = palette[rng.Next(palette.Count)];
+                    }
+                }
+                break;
+
+            case GenerationMode.PerlinIslands:
+                {
+                    // Build a stable index order for palette
+                    var pal = palette.ToArray();
+                    for (int i = 0; i < total; i++)
+                    {
+                        if (obstacles.Contains(i)) continue;
+                        int r = i / cols;
+                        int c = i % cols;
+
+                        float nx = (float)rng.NextDouble() * 1000f; // each board gets unique offset
+                        float nz = (float)rng.NextDouble() * 1000f;
+
+                        // Sample once with fixed offsets to keep reproducible pattern for the seed
+                        float v = Mathf.PerlinNoise((c + nx) / m_PerlinScale, (r + nz) / m_PerlinScale);
+                        int band = Mathf.Clamp(Mathf.FloorToInt(v * pal.Length), 0, pal.Length - 1);
+                        outColors[i] = pal[band];
+                    }
+
+                    // Optional: one smoothing pass to reinforce islands (majority of 4-neighbors)
+                    var copy = (ColorType[])outColors.Clone();
+                    for (int i = 0; i < total; i++)
+                    {
+                        if (obstacles.Contains(i)) continue;
+                        var neigh = GetNeighbors4(i, rows, cols);
+                        var counts = new Dictionary<ColorType, int>();
+                        foreach (var n in neigh)
+                        {
+                            if (obstacles.Contains(n)) continue;
+                            var col = copy[n];
+                            if (col == ColorType.NONE) continue;
+                            counts[col] = counts.TryGetValue(col, out int ct) ? ct + 1 : 1;
+                        }
+                        if (counts.Count > 0)
+                        {
+                            var kv = counts.OrderByDescending(p => p.Value).First();
+                            // Only overwrite if there’s a clear majority (>=3 of 4)
+                            if (kv.Value >= 3) outColors[i] = kv.Key;
+                        }
+                    }
+                }
+                break;
+        }
+
+        return outColors;
+    }
+
+    private List<int> GrowCluster(
+        int seedIdx,
+        int targetSize,
+        int rows,
+        int cols,
+        HashSet<int> remaining,
+        HashSet<int> obstacles,
+        System.Random rng)
+    {
+        var cluster = new List<int>(targetSize);
+        var q = new Queue<int>();
+        if (!remaining.Contains(seedIdx)) return cluster;
+
+        q.Enqueue(seedIdx);
+        remaining.Remove(seedIdx);
+
+        while (q.Count > 0 && cluster.Count < targetSize)
+        {
+            int cur = q.Dequeue();
+            cluster.Add(cur);
+
+            // Randomize neighbor order for organic shapes
+            var neigh = GetNeighbors4(cur, rows, cols);
+            Shuffle(neigh, rng);
+
+            foreach (var n in neigh)
+            {
+                if (cluster.Count >= targetSize) break;
+                if (obstacles.Contains(n)) continue;
+                if (!remaining.Contains(n)) continue;
+
+                remaining.Remove(n);
+                q.Enqueue(n);
+            }
+        }
+
+        return cluster;
+    }
+
+    private static List<int> GetNeighbors4(int idx, int rows, int cols)
+    {
+        int r = idx / cols;
+        int c = idx % cols;
+        var list = new List<int>(4);
+        if (c > 0) list.Add(idx - 1);
+        if (c < cols - 1) list.Add(idx + 1);
+        if (r > 0) list.Add(idx - cols);
+        if (r < rows - 1) list.Add(idx + cols);
+        return list;
     }
 
     [Button("Clear Spawned Groups (Editor)", ButtonSizes.Large)]
@@ -89,7 +316,6 @@ public class StickmanGroupSpawner : MonoBehaviour
     {
         if (m_GridPositioner == null) return;
 
-        // Prefer clearing anything that has a GridObject marker
         var allGridObjects = m_GridPositioner.GetComponentsInChildren<GridObject>(true);
         if (allGridObjects.Length > 0)
         {
@@ -105,7 +331,6 @@ public class StickmanGroupSpawner : MonoBehaviour
             return;
         }
 
-        // Fallback: clear StickmanGroup components (older prefabs)
         var groups = m_GridPositioner.GetComponentsInChildren<StickmanGroup>(true);
         foreach (var g in groups)
         {
@@ -117,7 +342,6 @@ public class StickmanGroupSpawner : MonoBehaviour
 #endif
         }
 
-        // And clear any child with the same name as the obstacle prefab (best-effort fallback)
         if (m_Obstacle != null)
         {
             var obstacleName = m_Obstacle.name;
@@ -125,7 +349,7 @@ public class StickmanGroupSpawner : MonoBehaviour
             foreach (var t in allChildren)
             {
                 if (t == m_GridPositioner.transform) continue;
-                if (t.GetComponent<StickmanGroup>() != null) continue; // already handled
+                if (t.GetComponent<StickmanGroup>() != null) continue;
                 if (t.name.StartsWith(obstacleName))
                 {
 #if UNITY_EDITOR
@@ -139,12 +363,22 @@ public class StickmanGroupSpawner : MonoBehaviour
         }
     }
 
-    // Fisher–Yates
+    // UnityEngine.Random shuffle (Fisher–Yates)
     private static void Shuffle<T>(IList<T> list)
     {
         for (int i = list.Count - 1; i > 0; i--)
         {
             int j = Random.Range(0, i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
+    // System.Random overload (for deterministic steps)
+    private static void Shuffle<T>(IList<T> list, System.Random rng)
+    {
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
             (list[i], list[j]) = (list[j], list[i]);
         }
     }

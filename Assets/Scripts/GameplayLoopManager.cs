@@ -62,14 +62,6 @@ public class GameplayLoopManager : MonoBehaviour
         StartCoroutine(RunTurn(value));
     }
 
-    void OnStickmenEngaged(Stickman player, Stickman enemy)
-    {
-        player.transform.gameObject.SetActive(false);
-        enemy.transform.gameObject.SetActive(false);
-        
-        //player.transform.GetComponent<Stickman>().SetTargetAndAttack(enemy.GetComponent<Stickman>());
-    }
-
     public void TryStartAttackCheck()
     {
         if (m_AttackRunning)
@@ -87,13 +79,11 @@ public class GameplayLoopManager : MonoBehaviour
         {
             m_AttackRunning = true;
             m_AttackPending = false;
-
-            // 🔹 Run actual check
+            
             yield return HandleAttackCheck();
 
             m_AttackRunning = false;
-
-            // 🔹 If something queued while we were running → loop again
+            
         } while (m_AttackPending);
 
         m_AttackRoutine = null;
@@ -190,8 +180,21 @@ public class GameplayLoopManager : MonoBehaviour
             var gridPos = m_PlayerBoardManager.GridToWorld(groupExitLoc);
             var feederIndex = m_Feeder.BuildSplineFor(gridPos, platformPos);
 
+            
+
+            
             var exitRec = recommended.GetRange(0, groupCount);
             recommended.RemoveRange(0, groupCount);
+
+            /*foreach (var exitrec in exitRec)
+            {
+                Debug.LogError("==========");
+                foreach (var exit in exitrec.Path)
+                {
+                    Debug.LogError(exit);
+                }
+                Debug.LogError("==========");
+            }*/
             
             splineFeederList.Add(new SplineFeederData()
             {
@@ -249,13 +252,14 @@ public class GameplayLoopManager : MonoBehaviour
 
     IEnumerator HandleAttackCheck()
     {
+        var clearEnemyGrids = new List<Vector2Int>();
         var platforms = m_PlatformManager.GetAll();
         int movingCount = 0;
 
         for (int i = 0; i < platforms.Count; i++)
         {
             var platColor = platforms[i].CurrentColorType;
-            if (platColor == ColorType.NONE || platforms[0].CurrentCounterValue <= 0)  
+            if (platColor == ColorType.NONE || platforms[i].CurrentCounterValue <= 0)  
                 continue;
             
             var currentPlatform = m_PlatformManager.GetPlatformWithIndex(i);
@@ -286,7 +290,7 @@ public class GameplayLoopManager : MonoBehaviour
                     group.ActivateFollowPointState();
                 
                 var enemyGridList = enemyStickmenGroup.Select(i => i.GroupGridLoc).ToList();
-                
+                clearEnemyGrids.AddRange(enemyGridList);
                 movingCount++;
                 for (int j = 0; j < playerStickmen.Count; j++)
                 {
@@ -301,7 +305,6 @@ public class GameplayLoopManager : MonoBehaviour
                     m_StickmanPointFeeder.MoveTargetThroughPoints(splinePoints, playerStickmen[j].FollowSphere.transform, () =>
                     {
                         movingCount--;
-                        StartCoroutine(ClearEnemyGrid(enemyGridList, 0.2f));
                     }, () =>
                     {
                         StartCoroutine(HandleAttack(playerStickmen[localVal], enemyStickmenGroup[localVal]));
@@ -312,6 +315,8 @@ public class GameplayLoopManager : MonoBehaviour
         }
         
         yield return new WaitUntil(() => movingCount <= 0);
+        
+        StartCoroutine(ClearEnemyGrid(clearEnemyGrids, 0.3f));
     }   
 
 
