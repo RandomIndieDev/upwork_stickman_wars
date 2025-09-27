@@ -6,6 +6,13 @@ using CW.Common;
 using DG.Tweening;
 using UnityEditor.UIElements;
 
+
+public class AttackableGridsData
+{
+    public List<Vector2Int> ConnectedGrids = new List<Vector2Int>();
+    public List<StickmanGroup> AssignedPlayerGroups = new List<StickmanGroup>();
+}
+
 public class EnemyGridManager : MonoBehaviour
 {
     [BoxGroup("References"), SerializeField] Transform m_GroupHolder;
@@ -91,20 +98,48 @@ public class EnemyGridManager : MonoBehaviour
         }
     }
 
-    public List<Vector3> GetAllFirstRowPositions()
+    public List<AttackableGridsData> GetAttackableGridsData(ColorType color)
     {
-        int yVal = 0;
+        var result = new List<AttackableGridsData>();
+        var gridsWithColor = GetGridsWithColor(color); // first row matches
 
-        var positions = new List<Vector3>();
-        
-        for (int xVal = 0; xVal < m_GridPositioner.columns; xVal++)
+        foreach (var startGrid in gridsWithColor)
         {
-            positions.Add(GridToWorld(new Vector2Int(xVal, yVal)));
+            var connected = new List<Vector2Int>();
+
+            // Walk downward from the first row until the color no longer matches
+            for (int row = startGrid.y; row < m_GridPositioner.rows; row++)
+            {
+                var key = new Vector2Int(startGrid.x, row);
+                if (board.TryGetValue(key, out var group) && group != null)
+                {
+                    if (group.GroupColor == color)
+                    {
+                        connected.Add(key);
+                    }
+                    else
+                    {
+                        break; // stop if color doesn’t match anymore
+                    }
+                }
+                else
+                {
+                    break; // stop if no group in this cell
+                }
+            }
+
+            if (connected.Count > 0)
+            {
+                result.Add(new AttackableGridsData
+                {
+                    ConnectedGrids = connected
+                });
+            }
         }
 
-        return positions;
+        return result;
     }
-
+    
     public StickmanGroup GetGroupInGrid(Vector2Int gridPos)
     {
         return board[gridPos];

@@ -75,8 +75,7 @@ public class PlatformManager : MonoBehaviour
 
         return result;
     }
-
-
+    
     /// <summary>
     /// Finds a non-empty platform of a given color.
     /// </summary>

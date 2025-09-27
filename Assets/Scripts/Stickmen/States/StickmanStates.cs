@@ -49,7 +49,6 @@ public class FollowPointState : IState<Stickman>
     public string Name => StickmanState.FollowPointState.ToString();
 
     private readonly Transform _offsetSource; // external point we pass in
-
     private Transform _followSphere;
     private Vector3 _offset;         // base offset from followSphere to keep formation
     private Vector3 _staticOffset;   // small unique bias per stickman
@@ -57,14 +56,18 @@ public class FollowPointState : IState<Stickman>
     private float _orbitPhase;       // per-stickman orbital phase
     private Vector3 _vel;            // for SmoothDamp
 
-    // ---- Tunables (tweak to taste) ----
-    private readonly float _smoothTime;       // SmoothDamp time (smaller = snappier)
-    private readonly float _maxSpeed;         // SmoothDamp max speed cap
-    private readonly float _orbitRadius;      // radius of slow circular drift
-    private readonly float _orbitSpeed;       // speed of the circular drift (rad/s)
-    private readonly float _noiseAmp;         // amplitude of Perlin noise jitter
-    private readonly float _noiseFreq;        // frequency of Perlin noise
-    private readonly float _leashDistance;    // when far, reduce noise/orbit to re-group
+    // ---- Tunables ----
+    private readonly float _smoothTime;
+    private readonly float _maxSpeed;
+    private readonly float _orbitRadius;
+    private readonly float _orbitSpeed;
+    private readonly float _noiseAmp;
+    private readonly float _noiseFreq;
+    private readonly float _leashDistance;
+
+    // ---- Separation ----
+    private readonly float _separationRadius = 0.4f;   // how close before repelling
+    private readonly float _separationStrength = 0.5f; // multiplier for push
 
     public FollowPointState(
         Transform offsetSource,
@@ -91,23 +94,21 @@ public class FollowPointState : IState<Stickman>
         _followSphere = stickman.CurrentFollowTarget;
         if (_followSphere == null) return;
 
-        // Base formation offset: relative to provided offsetSource (fallback: stickman)
-        if (_offsetSource != null)
-            _offset = _offsetSource.position - _followSphere.position;
-        else
-            _offset = stickman.transform.position - _followSphere.position;
+        // Base offset relative to provided offsetSource (fallback: self)
+        _offset = _offsetSource != null
+            ? _offsetSource.position - _followSphere.position
+            : stickman.transform.position - _followSphere.position;
 
-        // Small unique bias so multiple stickmen don't stack perfectly
+        // Small unique bias so multiple stickmen don’t stack perfectly
         _staticOffset = new Vector3(
             Random.Range(-0.10f, 0.10f),
             0f,
             Random.Range(-0.10f, 0.10f)
         );
 
-        // Per-stickman seeds for noise & orbit, keeps variety but stable over time
+        // Seeds for noise & orbit
         _noiseSeed  = Random.Range(0f, 100f);
         _orbitPhase = Random.Range(0f, Mathf.PI * 2f);
-
         _vel = Vector3.zero;
 
         stickman.Animator.SetBool("Jog", true);
@@ -117,30 +118,49 @@ public class FollowPointState : IState<Stickman>
     {
         if (_followSphere == null) return;
 
-        // Base target = follow target + formation offset
+        // --- Base target formation ---
         Vector3 baseTarget = _followSphere.position + _offset;
 
-        // Soft leash: if far from base, damp the decorative offsets (orbit/noise)
+        // Leash scaling → reduce orbit/noise when far away
         float distToBase = Vector3.Distance(stickman.transform.position, baseTarget);
-        float leashT = Mathf.InverseLerp(0f, _leashDistance, distToBase); // 0 near, 1 far
-        float decorScale = 1f - 0.65f * leashT; // reduce up to 65% when far
+        float leashT = Mathf.InverseLerp(0f, _leashDistance, distToBase);
+        float decorScale = 1f - 0.65f * leashT;
 
         float t = Time.time;
 
-        // Slow orbital drift around the base point (keeps the group "alive")
+        // Orbit around the follow point
         Vector3 orbit =
             new Vector3(Mathf.Cos(t * _orbitSpeed + _orbitPhase), 0f,
                         Mathf.Sin(t * _orbitSpeed + _orbitPhase)) * (_orbitRadius * decorScale);
 
-        // Subtle noise for non-uniform motion (different axes & seeds)
+        // Perlin noise jitter
         float nx = (Mathf.PerlinNoise(t * _noiseFreq, _noiseSeed) - 0.5f) * 2f;
         float nz = (Mathf.PerlinNoise(_noiseSeed, t * _noiseFreq) - 0.5f) * 2f;
         Vector3 noise = new Vector3(nx, 0f, nz) * (_noiseAmp * decorScale);
 
-        // Final desired target
+        // Final target
         Vector3 desired = baseTarget + _staticOffset + orbit + noise;
 
-        // Smooth-damped movement feels organic and stays together
+        // --- NEW: Separation from neighbors ---
+        Vector3 separation = Vector3.zero;
+        if (stickman.Group != null) // assumes Stickman has a ref to its group
+        {
+            foreach (var other in stickman.Group.Members)
+            {
+                if (other == stickman) continue;
+
+                float dist = Vector3.Distance(stickman.transform.position, other.transform.position);
+                if (dist < _separationRadius)
+                {
+                    Vector3 away = (stickman.transform.position - other.transform.position).normalized;
+                    separation += away * (_separationRadius - dist);
+                }
+            }
+        }
+
+        desired += separation * _separationStrength;
+
+        // SmoothDamp toward the final desired position
         stickman.transform.position = Vector3.SmoothDamp(
             stickman.transform.position,
             desired,
@@ -149,7 +169,7 @@ public class FollowPointState : IState<Stickman>
             _maxSpeed
         );
 
-        // Face movement direction if moving
+        // Rotate toward movement direction
         Vector3 moveDir = desired - stickman.transform.position;
         moveDir.y = 0f;
         if (moveDir.sqrMagnitude > 0.0001f)
@@ -163,6 +183,7 @@ public class FollowPointState : IState<Stickman>
         stickman.ResetRotation();
     }
 }
+
 
 
 
@@ -215,7 +236,7 @@ public class AttackingState : IState<Stickman>
         }
         
         Vector3 direction = (_target.transform.position - stickman.transform.position).normalized;
-        stickman.transform.position += direction * _attackSpeed * Time.deltaTime;
+        stickman.transform.position += direction * (_attackSpeed * Time.deltaTime);
         
         if (direction.sqrMagnitude > 0.001f)
         {
@@ -225,6 +246,9 @@ public class AttackingState : IState<Stickman>
         float dist = Vector3.Distance(stickman.transform.position, _target.transform.position);
         if (dist <= _attackRange)
         {        
+            
+            stickman.AudioManager.PlayOneShot(SoundType.DeathSound);
+
             stickman.SetState(new DeathState());
             _target.SetState(new DeathState());
         }
@@ -240,10 +264,10 @@ public class DeathState : IState<Stickman>
 {
     public string Name => StickmanState.Death.ToString();
 
-    public void Enter(Stickman stickman) 
-    { 
+    public void Enter(Stickman stickman)
+    {
+        stickman.ParticleManager.Play("Splash", stickman.transform.position, StickmanColors.Instance.GetColor(stickman.ColorType));
         stickman.gameObject.SetActive(false);
-        ParticleManager.Instance.Play("Splash", stickman.transform.position, StickmanColors.Instance.GetColor(stickman.ColorType));
     }
 
     public void Tick(Stickman stickman) { }

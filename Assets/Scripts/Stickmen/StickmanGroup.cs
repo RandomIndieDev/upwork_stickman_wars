@@ -37,6 +37,9 @@ public class StickmanGroup : MonoBehaviour
     public Vector2Int GroupGridLoc => m_GroupGridLoc;
     public ColorType GroupColor => m_GroupColorType;
     public Transform FollowSphere => m_FollowSphere;
+    public List<Stickman> Members => m_Stickmen;
+
+    public Action OnReadyForStep;
     
     public bool IsTopEmpty
     {
@@ -48,8 +51,10 @@ public class StickmanGroup : MonoBehaviour
     {
         m_GroupGridLoc = gridLoc;
         
-        //TODO: Remove this
-        m_FollowSphere.GetComponent<MeshRenderer>().enabled = false;
+        foreach (var stickman in m_Stickmen)
+        {
+            stickman.Init(this);
+        }
         
         if (m_localOriginalPos == null) return;
         if (m_localOriginalPos.Count <= 0)
@@ -103,12 +108,11 @@ public class StickmanGroup : MonoBehaviour
     public void Init(ColorType selectedColor)
     {
         m_GroupColorType = selectedColor;
-
-
+        
         foreach (var stickman in m_Stickmen)
         {
             stickman.ColorType = selectedColor;
-            stickman.Init();
+            stickman.Init(this);
         }
     }
 
@@ -369,38 +373,41 @@ public class StickmanGroup : MonoBehaviour
         }
     }
     
-    public void TraverseThroughPoints(List<Vector3> positions, Action OnCompleted)
+    public void TraverseThroughPoints(Vector2Int selectedGrid, List<Vector3> positions, Action OnCompleted)
     {
         if (positions == null || positions.Count == 0) return;
-        if (positions.Count == 1)
+
+        // ✅ Case 1: Player clicked group (same grid) → instant
+        if (positions.Count == 1 && selectedGrid == GroupGridLoc)
         {
             OnCompleted?.Invoke();
             return;
         }
 
+        // ✅ Case 2: Single step but NOT clicked group → add small delay
+        if (positions.Count == 1 && selectedGrid != GroupGridLoc)
+        {
+            DOVirtual.DelayedCall(0.15f, () => OnCompleted?.Invoke());
+            return;
+        }
+        
         m_FollowSphere.DOKill();
-    
+
         float totalDistance = 0f;
         for (int i = 1; i < positions.Count; i++)
             totalDistance += Vector3.Distance(positions[i - 1], positions[i]);
 
-        float baseSpeed = 2f;
-        
-        // float speed = baseSpeed + Mathf.Pow(positions.Count, 1.2f); // exponential style
-        // float speed = baseSpeed + Mathf.Log(positions.Count + 1) * 2f; // logarithmic
-        float speed = baseSpeed + Mathf.Sqrt(positions.Count) * 1.2f; // square-root: mild ramp
-
+        float baseSpeed = .8f;
+        float speed = baseSpeed + Mathf.Sqrt(positions.Count) * 1.2f;
         float duration = totalDistance / speed;
 
         m_FollowSphere
             .DOPath(positions.ToArray(), duration, PathType.CatmullRom)
             .SetEase(Ease.Linear)
-            .SetLookAt(0.01f, Vector3.up) 
-            .OnComplete(() =>
-            {
-                OnCompleted?.Invoke();
-            });
+            .SetLookAt(0.01f, Vector3.up)
+            .OnComplete(() => OnCompleted?.Invoke());
     }
+
 
 
 

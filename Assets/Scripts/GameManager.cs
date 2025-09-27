@@ -1,25 +1,31 @@
 using System.Collections;
 using System.Collections.Generic;
 using DG.Tweening;
+using Sirenix.OdinInspector;
 using UnityEngine;
 
 public class GameManager : MonoBehaviour
 {
-    // Start is called before the first frame update
-    void Start()
+    [BoxGroup("Master Settings"), SerializeField, InlineEditor(InlineEditorObjectFieldModes.Boxed)]
+    GameplaySettings m_Settings;
+
+    
+    public static GameManager Instance { get; private set; }
+
+    public GameplaySettings GameSettings => m_Settings;
+
+    void Awake()
     {
-        EventManager.Subscribe<Vector2Int>("OnGridClicked", OnGridClicked);
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+        
         DOTween.SetTweensCapacity(1000, 10);
     }
 
-    void OnGridClicked(Vector2Int value)
-    {
-        
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-        
-    }
 }

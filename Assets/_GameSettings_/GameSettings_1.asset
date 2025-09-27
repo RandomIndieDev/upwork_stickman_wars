@@ -1,0 +1,17 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3525bedcfb647e94a8f58e13e21b516c, type: 3}
+  m_Name: GameSettings_1
+  m_EditorClassIdentifier: 
+  DelayBeforeMovingToPlatform: 0.08
+  MoveToPlatformSpeed: 0.5
+  MovePastPlatformSpeed: 0.8

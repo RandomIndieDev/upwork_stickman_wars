@@ -11,6 +11,9 @@ public class Platform : MonoBehaviour
     [BoxGroup("References"), SerializeField] TMP_Text m_PlatformCounterText;
     [BoxGroup("References"), SerializeField] GridPositioner m_GridPositioner;
 
+    [BoxGroup("Canvas Elements"), SerializeField] Transform m_PlatformImg;
+    [BoxGroup("Canvas Elements"), SerializeField] Transform m_CounterTxt;
+
     [BoxGroup("References"), SerializeField] Transform m_PlatformInput;
     [BoxGroup("References"), SerializeField] Transform m_PlatformOutput;
 
@@ -20,6 +23,8 @@ public class Platform : MonoBehaviour
     [SerializeField, ReadOnly] int m_InTransitionCounterValue;
     [SerializeField, ReadOnly] int m_MaxCounterValue;
 
+    AudioManager m_AudioManager;
+
     int m_Index;
 
     public Transform PlatformOutput => m_PlatformOutput;
@@ -28,6 +33,15 @@ public class Platform : MonoBehaviour
     public List<StickmanGroup> m_GroupList;
 
     public int Index => m_Index;
+
+    GameplaySettings m_Settings;
+
+    void Start()
+    {
+        m_Settings = GameManager.Instance.GameSettings;
+        
+        m_AudioManager = AudioManager.Instance;
+    }
 
     public void PrebookSpots(ColorType colorType, int count)
     {
@@ -111,19 +125,29 @@ public class Platform : MonoBehaviour
     public void AddStickmanGroup(StickmanGroup stickmanGroup, Action OnCompleted)
     {
         var stickmen = stickmanGroup.GetStickmen();
-        float duration = 0.7f;
-        int counter = 0;
-        
-        foreach (var stickman in stickmen)
+        float duration = m_Settings.MoveToPlatformSpeed;
+
+        var group = stickmanGroup.GetStickmen();
+
+        for (int i = 0; i < group.Count; i++)
         {
+            var stickman = group[i];
             var gridPos = Get2DPosition(m_AvailableCounterValue);
             var worldPos = m_GridPositioner.GetWorldPosition(new Vector2Int(gridPos.xPos, gridPos.yPos));
 
             stickman.RotateModelTo(worldPos, 0.05f);
             stickman.SetState(new MovingState());
 
-            int counter1 = counter;
-            stickman.transform.DOMove(worldPos, duration).SetDelay(0.08f * counter).SetEase(Ease.Linear)
+            int counter1 = i;
+            
+            IncrementCounter();
+            
+            
+            PlayCanvasAnimation(3);
+            stickman.transform.DOMove(worldPos, duration).SetDelay(m_Settings.DelayBeforeMovingToPlatform * i).OnStart(() =>
+                {
+                    m_AudioManager.PlayOneShot(SoundType.AddToPlatform);
+                }).SetEase(Ease.Linear)
                 .OnComplete(() =>
                 {
                     stickman.SetState(new IdleState());
@@ -131,13 +155,11 @@ public class Platform : MonoBehaviour
 
                     if (counter1 == 3)
                     {
+                        PlayTextAnimation();
                         stickmanGroup.ResetFollowSphere();
                         OnCompleted?.Invoke();
                     }
                 });
-
-            counter++;
-            IncrementCounter();
         }
         
         m_GroupList.Add(stickmanGroup);
@@ -161,11 +183,11 @@ public class Platform : MonoBehaviour
         foreach (var group in m_GroupList)
         {
             var stickmen = group.GetStickmen();
+            stickmen.Reverse();
             for (int i = 0; i < stickmen.Count; i++)
             {
                 var stickman = stickmen[i];
-
-                // Get the new grid position based on its *new index* in the platform
+                
                 int flatIndex = groupIndex * 4 + i;
                 var gridPos = Get2DPosition(flatIndex);
                 var worldPos = m_GridPositioner.GetWorldPosition(new Vector2Int(gridPos.xPos, gridPos.yPos));
@@ -198,9 +220,39 @@ public class Platform : MonoBehaviour
         
         DecrementCounter(count * 4);
         UpdateCountText();
+        PlayTextAnimation();
 
         return removedGroups;
     }
+
+
+    void PlayTextAnimation()
+    {
+        m_CounterTxt.transform.DOKill();
+
+        m_CounterTxt.transform.localPosition = Vector3.zero;
+        m_CounterTxt.transform.localScale = Vector3.one;
+
+        m_CounterTxt.transform
+            .DOScale(1.2f, 0.2f)
+            .SetEase(Ease.OutQuad)
+            .OnComplete(() =>
+            {
+                m_CounterTxt.transform.DOScale(1f, 0.2f).SetEase(Ease.OutQuad);
+            });
+    }
+    
+    void PlayCanvasAnimation(int loopCount)
+    {
+        m_PlatformImg.transform.DOKill();
+        m_PlatformImg.transform.localScale = Vector3.one;
+
+        m_PlatformImg.transform
+            .DOPunchScale(Vector3.one * 0.1f, 0.25f, 1, 0.6f)
+            .SetEase(Ease.OutQuad)
+            .SetLoops(loopCount, LoopType.Restart);
+    }
+
     
     TwoDimensionalPos Get2DPosition(int index)
     {

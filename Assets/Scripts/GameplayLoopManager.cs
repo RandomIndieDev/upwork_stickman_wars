@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using DG.Tweening;
 using Dreamteck.Splines;
 using Sirenix.OdinInspector;
 using Sirenix.Utilities;
@@ -18,30 +19,33 @@ public class GameplayLoopManager : MonoBehaviour
 
     [BoxGroup("References"), SerializeField] StickmenBoardManager m_PlayerBoardManager;
     [BoxGroup("References"), SerializeField] StickmanFeeder m_StickmanFeeder;
-    
-    //Enemy
+
     [BoxGroup("References"), SerializeField] EnemyGridManager m_EnemyGridManager;
     [BoxGroup("References"), SerializeField] SplinePathBuilder m_SplinePathBuilder;
     [BoxGroup("References"), SerializeField] StickmanPointFeeder m_StickmanPointFeeder;
     
-    
-
     int m_SelectedTotalSpotCount;
     ColorType m_SelectedColor;
     Vector2Int m_SelectedGrid;
     
     List<Vector2Int> m_SelectedGridList;
     GroupExitData m_CurrentGroupExitData;
+
+    AudioManager m_AudioManager;
+    GameplaySettings m_GameplaySettings;
+    
+    Coroutine m_AttackRoutine;
     
     bool m_ProcessingTurn;
-    
-    private Coroutine m_AttackRoutine;
-    private bool m_AttackRunning;
-    private bool m_AttackPending;
+    bool m_AttackRunning;
+    bool m_AttackPending;
 
     void Start()
     {
         EventManager.Subscribe<Vector2Int>("OnGridClicked", OnGridClicked);
+        
+        m_GameplaySettings = GameManager.Instance.GameSettings;
+        m_AudioManager = AudioManager.Instance;
         
         m_SplinePathBuilder.BuildAndSaveAllPaths();
     }
@@ -59,6 +63,7 @@ public class GameplayLoopManager : MonoBehaviour
     void OnGridClicked(Vector2Int value)
     {
         if (m_ProcessingTurn) return;
+        
         StartCoroutine(RunTurn(value));
     }
 
@@ -106,10 +111,14 @@ public class GameplayLoopManager : MonoBehaviour
         
         yield return HandleValidGridSelected();
         
-        m_ProcessingTurn = false;
+        EnablePlayerInput();
         TryStartAttackCheck();
     }
-    
+
+    void EnablePlayerInput()
+    {
+        m_ProcessingTurn = true;
+    }
 
     void HandlePlayerGridSelect()
     {
@@ -136,7 +145,12 @@ public class GameplayLoopManager : MonoBehaviour
 
         if (!m_CurrentGroupExitData.CanExit)
         {
+            m_AudioManager.PlayOneShot(SoundType.GridClickInvalid);
             selectedGroup.ShakeGroups();
+        }
+        else
+        {
+            m_AudioManager.PlayOneShot(SoundType.GridClickValid);
         }
     }
 
@@ -163,9 +177,6 @@ public class GameplayLoopManager : MonoBehaviour
             sharedExitWorldPath.Add(m_PlayerBoardManager.GridToWorld(gridPos));
         }
         
-        var splineBuilt = false;
-
-
         var splineFeederList = new List<SplineFeederData>();
         
         var allocations = m_PlatformManager.GetFreePlatformsOfType(m_SelectedColor, m_SelectedTotalSpotCount);
@@ -181,20 +192,8 @@ public class GameplayLoopManager : MonoBehaviour
             var feederIndex = m_Feeder.BuildSplineFor(gridPos, platformPos);
 
             
-
-            
             var exitRec = recommended.GetRange(0, groupCount);
             recommended.RemoveRange(0, groupCount);
-
-            /*foreach (var exitrec in exitRec)
-            {
-                Debug.LogError("==========");
-                foreach (var exit in exitrec.Path)
-                {
-                    Debug.LogError(exit);
-                }
-                Debug.LogError("==========");
-            }*/
             
             splineFeederList.Add(new SplineFeederData()
             {
@@ -208,31 +207,60 @@ public class GameplayLoopManager : MonoBehaviour
 
         yield return new WaitForSeconds(0.02f);
 
+        var isDirectAttackAvailable = HasDirectAttackPath();
+
         foreach (var splineFeederData in splineFeederList)
         {
             var exitRecommendations = splineFeederData.ExitRecommendations;
+            var groupList = splineFeederData.ExitRecommendations
+                .Where(i => i.Group != null)  
+                .Select(i => i.Group)          
+                .ToList();
+
             var feederIndex = splineFeederData.SplineFeederIndex;
             var currentPlatform = splineFeederData.Platform;
-            
-            currentPlatform.PrebookSpots(m_SelectedColor, splineFeederData.TransferCount);
+
+            if (isDirectAttackAvailable)
+            {
+                StartCoroutine(HandleDirectAttackTransfer(groupList, currentPlatform));
+            }
+            else
+            {
+                currentPlatform.PrebookSpots(m_SelectedColor, splineFeederData.TransferCount);
+            }
             
             foreach (var exitRecom in exitRecommendations)
             {
+                if (exitRecom.Path.Count <= 1 && exitRecom.Group.GroupGridLoc != m_SelectedGrid)
+                {
+                    exitRecom.Path[0] = m_SelectedGrid;
+                }
+                
                 var worldPath = new List<Vector3>();
                 foreach (var gridPos in exitRecom.Path)
                     worldPath.Add(m_PlayerBoardManager.GridToWorld(gridPos));
 
 
                 transferCount++;
+
+                exitRecom.Platform = currentPlatform;
+                
                 exitRecom.Group.ActivateFollowPointState();
-                exitRecom.Group.TraverseThroughPoints(worldPath, () =>
+                exitRecom.Group.TraverseThroughPoints(m_SelectedGrid,worldPath, () =>
                 {
                     m_Feeder.MoveAlongSpline(feederIndex, exitRecom.Group.FollowSphere, () =>
                     {
+                        if (isDirectAttackAvailable)
+                        {
+                            exitRecom.Group.OnReadyForStep?.Invoke();
+                            return;
+                        };
+                        
                         currentPlatform.AddStickmanGroup(exitRecom.Group, () =>
                         {
                             transferCount--;
                         });
+
                     }, () =>
                     {
                         exitRecom.Group.ResetFollowSphere();
@@ -243,6 +271,84 @@ public class GameplayLoopManager : MonoBehaviour
         }
 
         yield return new WaitUntil(() => transferCount <= 0);
+    }
+
+
+    bool HasDirectAttackPath()
+    {
+        return m_EnemyGridManager.GetGridsWithColor(m_SelectedColor).Count > 0;
+    }
+    
+    IEnumerator HandleDirectAttackTransfer(List<StickmanGroup> groups, Platform atPlatform)
+    {
+        var moveToLocation = atPlatform.PlatformOutput.position;
+
+        var attackableGridData = m_EnemyGridManager.GetAttackableGridsData(m_SelectedColor);
+        var currentGroupIndex = 0;
+        var jobCount = 0;
+        
+        
+        for (int i = 0; i < attackableGridData.Count; i++)
+        {
+            if (currentGroupIndex >= groups.Count) continue;
+            
+            var enemyGroupCount = attackableGridData[i].ConnectedGrids.Count; 
+            int neededGroups = Mathf.Min(enemyGroupCount, groups.Count);
+            
+            attackableGridData[i].AssignedPlayerGroups.AddRange(groups.GetRange(currentGroupIndex, neededGroups));
+            currentGroupIndex += neededGroups;
+        }
+
+        for (int i = 0; i < attackableGridData.Count; i++)
+        {
+            if (attackableGridData[i].AssignedPlayerGroups.Count <= 0) continue;
+
+            var gridX = attackableGridData[i].ConnectedGrids[0].x;
+            var assignedGroups = attackableGridData[i].AssignedPlayerGroups;
+            
+            for (int j = 0; j < assignedGroups.Count; j++)
+            {
+                var splinePoints = m_SplinePathBuilder.GetPath(atPlatform.Index, gridX);
+                var group = assignedGroups[j];
+                var enemyGroup = m_EnemyGridManager.GetGroupInGrid(attackableGridData[i].ConnectedGrids[j]);
+
+                jobCount++;
+                group.OnReadyForStep = null;
+                group.OnReadyForStep += () =>
+                {
+                    group.FollowSphere.DOMove(moveToLocation, m_GameplaySettings.MovePastPlatformSpeed).SetEase(Ease.Linear).onComplete += () =>
+                    {
+                        m_StickmanPointFeeder.MoveTargetThroughPoints(splinePoints, group.FollowSphere.transform, () =>
+                        {
+                            jobCount--;
+                        }, () =>
+                        {
+                            StartCoroutine(HandleAttack(group, enemyGroup));
+                        }, 0.8f);
+                    };
+                };
+            }
+        }
+
+        EnablePlayerInput();
+        
+        yield return new WaitUntil(() => jobCount <= 0);
+
+        var clearedGrids = GetClearedEnemyGrids(attackableGridData);
+        yield return ClearEnemyGrid(clearedGrids, 0.3f);
+    }
+
+    List<Vector2Int> GetClearedEnemyGrids(List<AttackableGridsData> data)
+    {
+        var clearedList = new List<Vector2Int>();
+
+        foreach (var gridData in data)
+        {
+            var clearedCount = gridData.AssignedPlayerGroups.Count;
+            clearedList.AddRange(gridData.ConnectedGrids.GetRange(0,clearedCount));
+        }
+
+        return clearedList;
     }
 
     void RunPlatformCheck()
@@ -278,13 +384,13 @@ public class GameplayLoopManager : MonoBehaviour
                     ? new List<StickmanGroup>(connectedVert) 
                     : new List<StickmanGroup> { firstRowGroup };
                 
-                var splinePoints = m_SplinePathBuilder.GetPath(i, grid.x);
+
                 
                 removedCount += neededGroups;
                 
                 var playerStickmen = currentPlatform.RemoveGroups(neededGroups);
                 var enemyStickmenGroup = chained.GetRange(0, neededGroups);
-                
+                var splinePoints = m_SplinePathBuilder.GetPath(currentPlatform.Index, grid.x);
                 
                 foreach (var group in playerStickmen)
                     group.ActivateFollowPointState();
@@ -316,7 +422,7 @@ public class GameplayLoopManager : MonoBehaviour
         
         yield return new WaitUntil(() => movingCount <= 0);
         
-        StartCoroutine(ClearEnemyGrid(clearEnemyGrids, 0.3f));
+        StartCoroutine(ClearEnemyGrid(clearEnemyGrids, 0.5f));
     }   
 
 

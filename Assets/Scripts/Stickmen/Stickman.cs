@@ -21,11 +21,19 @@ public class Stickman : MonoBehaviour
     [ShowInInspector, ReadOnly, BoxGroup("Debug")]
     private string DebugState => stateMachine != null ? stateMachine.CurrentStateName : "None";
     StateMachine stateMachine;
+
+    StickmanGroup m_CurrentGroup;
     
     public Animator Animator => m_Animator;
     public GameObject Model => m_Model;
-
+    public StickmanGroup Group => m_CurrentGroup;
+    public AudioManager AudioManager => m_AudioManager;
+    public ParticleManager ParticleManager => m_ParticleManager;
+    
     Transform m_CurrentFollowTarget;
+    
+    AudioManager m_AudioManager;
+    ParticleManager m_ParticleManager;
 
     public Transform CurrentFollowTarget
     {
@@ -39,8 +47,13 @@ public class Stickman : MonoBehaviour
         set => m_ColorType = value;
     }
     
-    public void Init()
+    public void Init(StickmanGroup currentGroup)
     {
+        m_CurrentGroup = currentGroup;
+        
+        m_AudioManager = AudioManager.Instance;
+        m_ParticleManager = ParticleManager.Instance;
+
         stateMachine = gameObject.GetComponent<StateMachine>();
         if (stateMachine == null)
         {
@@ -58,11 +71,6 @@ public class Stickman : MonoBehaviour
     public void SetState(IState<Stickman> newState)
     {
         stateMachine.SetState(newState);
-    }
-    
-    void Start()
-    {
-        Init();
     }
 
     public void SetTargetAndAttack(Stickman target)
@@ -88,16 +96,5 @@ public class Stickman : MonoBehaviour
     {
         m_Model.transform.DOKill();
         m_Model.transform.DOLocalRotate(Vector3.zero, 0.08f);
-    }
-
-    public void OnTriggerEnter(Collider other)
-    {
-        if (transform.CompareTag("Enemy")) return;
-        Debug.LogError("calledhere");
-        if (other.CompareTag("Enemy"))
-        {
-            gameObject.SetActive(false);
-            other.gameObject.SetActive(false);
-        }
     }
 }

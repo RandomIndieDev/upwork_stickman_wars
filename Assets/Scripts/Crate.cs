@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using DG.Tweening;
@@ -6,9 +7,18 @@ using UnityEngine;
 public class Crate : MonoBehaviour
 {
     public Transform m_Visual;
-    
+
+    public AudioManager m_AudioManager;
+
+    void Start()
+    {
+        m_AudioManager = AudioManager.Instance;
+    }
+
     public void OnClick()
     {
+        m_AudioManager.PlayOneShot(SoundType.CrateClicked);
+        
         m_Visual.transform.DOKill();
         m_Visual.transform.localPosition = Vector3.zero;
         m_Visual.transform.localScale = Vector3.one;

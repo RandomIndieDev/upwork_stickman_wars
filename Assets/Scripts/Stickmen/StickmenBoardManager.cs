@@ -249,9 +249,6 @@ public class StickmenBoardManager : MonoBehaviour
         {
             return MergeIntoExitPath(start, exitPath, sourceColor);
         }
-
-        Debug.LogError(" == Start ==");
-        Debug.LogError(start);
         
         var bfsPath = FindPathToExit(start, sourceColor);
         if (bfsPath.Count > 0)
@@ -384,6 +381,7 @@ public class StickmenBoardManager : MonoBehaviour
     
     public class ExitRecommendation
     {
+        public Platform Platform;
         public StickmanGroup Group;
         public List<Vector2Int> Path;
     }
