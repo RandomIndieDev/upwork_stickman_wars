@@ -40,12 +40,18 @@ public class GameplayLoopManager : MonoBehaviour
     bool m_AttackRunning;
     bool m_AttackPending;
 
+    List<Vector2Int> m_ClearedGrids;
+
+    bool m_GridUpdateRunning;
+    
     void Start()
     {
         EventManager.Subscribe<Vector2Int>("OnGridClicked", OnGridClicked);
         
         m_GameplaySettings = GameManager.Instance.GameSettings;
         m_AudioManager = AudioManager.Instance;
+
+        m_ClearedGrids = new List<Vector2Int>();
         
         m_SplinePathBuilder.BuildAndSaveAllPaths();
     }
@@ -93,6 +99,22 @@ public class GameplayLoopManager : MonoBehaviour
 
         m_AttackRoutine = null;
     }
+    
+    private IEnumerator RunGridUpdateWrapper()
+    {
+        do
+        {
+            m_GridUpdateRunning = true;
+            
+            yield return ClearEnemyGrid(m_ClearedGrids, 0.4f);
+
+            m_ClearedGrids.Clear();
+            m_GridUpdateRunning = false;
+            
+        } while (m_GridUpdateRunning);
+
+        m_AttackRoutine = null;
+    }
 
 
     IEnumerator RunTurn(Vector2Int clickLocation)
@@ -117,7 +139,7 @@ public class GameplayLoopManager : MonoBehaviour
 
     void EnablePlayerInput()
     {
-        m_ProcessingTurn = true;
+        m_ProcessingTurn = false;
     }
 
     void HandlePlayerGridSelect()
@@ -282,7 +304,6 @@ public class GameplayLoopManager : MonoBehaviour
     IEnumerator HandleDirectAttackTransfer(List<StickmanGroup> groups, Platform atPlatform)
     {
         var moveToLocation = atPlatform.PlatformOutput.position;
-
         var attackableGridData = m_EnemyGridManager.GetAttackableGridsData(m_SelectedColor);
         var currentGroupIndex = 0;
         var jobCount = 0;
@@ -297,6 +318,22 @@ public class GameplayLoopManager : MonoBehaviour
             
             attackableGridData[i].AssignedPlayerGroups.AddRange(groups.GetRange(currentGroupIndex, neededGroups));
             currentGroupIndex += neededGroups;
+        }
+
+        if (currentGroupIndex <= groups.Count)
+        {
+            for (int i = currentGroupIndex; i < groups.Count; i++)
+            {
+                groups[i].OnReadyForStep = null;
+                int i1 = i;
+                groups[i].OnReadyForStep += () =>
+                {
+                    atPlatform.AddStickmanGroup(groups[i1], () =>
+                    {
+
+                    });
+                };
+            }
         }
 
         for (int i = 0; i < attackableGridData.Count; i++)
@@ -334,8 +371,8 @@ public class GameplayLoopManager : MonoBehaviour
         
         yield return new WaitUntil(() => jobCount <= 0);
 
-        var clearedGrids = GetClearedEnemyGrids(attackableGridData);
-        yield return ClearEnemyGrid(clearedGrids, 0.3f);
+        m_ClearedGrids.AddRange(GetClearedEnemyGrids(attackableGridData));
+        yield return RunGridUpdateWrapper();
     }
 
     List<Vector2Int> GetClearedEnemyGrids(List<AttackableGridsData> data)
@@ -421,8 +458,9 @@ public class GameplayLoopManager : MonoBehaviour
         }
         
         yield return new WaitUntil(() => movingCount <= 0);
-        
-        StartCoroutine(ClearEnemyGrid(clearEnemyGrids, 0.5f));
+
+        m_ClearedGrids.AddRange(clearEnemyGrids);
+        yield return RunGridUpdateWrapper();
     }   
 
 

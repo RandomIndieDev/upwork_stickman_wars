@@ -50,6 +50,8 @@ public class StickmanGroup : MonoBehaviour
     public void GameplayInit(Vector2Int gridLoc)
     {
         m_GroupGridLoc = gridLoc;
+
+        m_FollowSphere.GetComponent<Renderer>().enabled = false;
         
         foreach (var stickman in m_Stickmen)
         {

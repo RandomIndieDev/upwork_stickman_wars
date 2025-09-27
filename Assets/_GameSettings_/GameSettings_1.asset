@@ -14,4 +14,4 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   DelayBeforeMovingToPlatform: 0.08
   MoveToPlatformSpeed: 0.5
-  MovePastPlatformSpeed: 0.8
+  MovePastPlatformSpeed: 0.5
