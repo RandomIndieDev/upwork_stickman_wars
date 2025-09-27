@@ -248,7 +248,8 @@ public class AttackingState : IState<Stickman>
         {        
             
             stickman.AudioManager.PlayOneShot(SoundType.DeathSound);
-
+            var centerPoint = GetCenterPoint(stickman.transform, _target.transform);
+            stickman.ParticleManager.Play("Splash", centerPoint + Vector3.up * 0.28f, StickmanColors.Instance.GetColor(stickman.ColorType));
             stickman.SetState(new DeathState());
             _target.SetState(new DeathState());
         }
@@ -258,6 +259,12 @@ public class AttackingState : IState<Stickman>
     {
         stickman.Animator.SetBool("Jog", false);
     }
+    
+    Vector3 GetCenterPoint(Transform a, Transform b)
+    {
+        return (a.position + b.position) / 2f;
+    }
+
 }
 
 public class DeathState : IState<Stickman>
@@ -266,7 +273,7 @@ public class DeathState : IState<Stickman>
 
     public void Enter(Stickman stickman)
     {
-        stickman.ParticleManager.Play("Splash", stickman.transform.position, StickmanColors.Instance.GetColor(stickman.ColorType));
+        ;
         stickman.gameObject.SetActive(false);
     }
 

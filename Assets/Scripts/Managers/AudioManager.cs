@@ -117,17 +117,40 @@ public class AudioManager : MonoBehaviour
         }
 
         float finalVolume = volume ?? s.volume;
-        float finalPitch = pitch ?? s.pitch;
 
-        var tempGO = new GameObject($"TempOneShot_{type}");
-        var tempSource = tempGO.AddComponent<AudioSource>();
-        tempSource.clip = s.clip;
-        tempSource.volume = finalVolume;
-        tempSource.pitch = finalPitch;
-        tempSource.Play();
+        // If allowMultiple is false → behave as normal one-shot
+        if (!s.allowMultiple)
+        {
+            float finalPitch = pitch ?? s.pitch;
+            var tempGO = new GameObject($"TempOneShot_{type}");
+            var tempSource = tempGO.AddComponent<AudioSource>();
+            tempSource.clip = s.clip;
+            tempSource.volume = finalVolume;
+            tempSource.pitch = finalPitch;
+            tempSource.Play();
+            Destroy(tempGO, s.clip.length / Mathf.Abs(finalPitch));
+        }
+        else
+        {
+            // allowMultiple logic → add variance + stack step
+            float basePitch = pitch ?? s.pitch;
+            float pitchOffset = Random.Range(-s.pitchVariance, s.pitchVariance);
+            float stackedPitch = basePitch + pitchOffset + (s.playCount * s.pitchStackStep);
 
-        Destroy(tempGO, s.clip.length / Mathf.Abs(finalPitch));
+            var tempGO = new GameObject($"TempOneShot_{type}");
+            var tempSource = tempGO.AddComponent<AudioSource>();
+            tempSource.clip = s.clip;
+            tempSource.volume = finalVolume;
+            tempSource.pitch = stackedPitch;
+            tempSource.loop = false;
+            tempSource.Play();
+
+            s.playCount++;
+            Destroy(tempGO, s.clip.length / Mathf.Abs(stackedPitch));
+            StartCoroutine(ResetCountAfterDelay(s, 0.2f));
+        }
     }
+
 
     private IEnumerator ResetCountAfterDelay(Sound s, float delay)
     {
